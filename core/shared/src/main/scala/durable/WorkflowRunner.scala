@@ -12,12 +12,15 @@ import scala.util.control.NonFatal
  *   - FlatMap sequencing
  *   - Errors
  *   - Local computations (sync, no cache)
- *   - StartActivity (async, cached with runtime index assignment)
+ *   - Activity (async, cached with runtime index assignment)
  *   - Suspend (external calls)
  *
  * Activity indices are assigned at runtime as the interpreter
- * encounters StartActivity nodes. This ensures deterministic
+ * encounters Activity nodes. This ensures deterministic
  * replay: same execution path = same indices.
+ *
+ * Each Activity captures its own storage and backend, so the runner
+ * doesn't need storage - it only needs workflowId and resumeFromIndex.
  */
 object WorkflowRunner:
 
@@ -25,12 +28,12 @@ object WorkflowRunner:
    * Run a workflow to completion or suspension.
    *
    * @param workflow The Durable workflow to run
-   * @param ctx The execution context (storage, workflowId, replay state)
+   * @param ctx The execution context (workflowId, replay state)
    * @return WorkflowResult - Completed, Suspended, or Failed
    */
-  def run[A, S](
-    workflow: Durable[A, S],
-    ctx: RunContext[S]
+  def run[A](
+    workflow: Durable[A],
+    ctx: RunContext
   )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
     val state = new InterpreterState(ctx.resumeFromIndex)
     step(workflow, ctx, state, Nil)
@@ -62,27 +65,35 @@ object WorkflowRunner:
    * @param state Interpreter state (tracks activity index)
    * @param stack Continuation stack (for FlatMap)
    */
-  private def step[A, S](
-    current: Durable[?, S],
-    ctx: RunContext[S],
+  private def step[A](
+    current: Durable[?],
+    ctx: RunContext,
     state: InterpreterState,
-    stack: List[Any => Durable[?, S]]
+    stack: List[Any => Durable[?]]
   )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
     current match
       case Durable.Pure(value) =>
         continueWith(value, ctx, state, stack)
 
       case Durable.FlatMap(fa, f) =>
-        step(fa, ctx, state, f.asInstanceOf[Any => Durable[?, S]] :: stack)
+        step(fa, ctx, state, f.asInstanceOf[Any => Durable[?]] :: stack)
 
       case Durable.Error(error) =>
         Future.successful(WorkflowResult.Failed(error))
 
       case Durable.LocalComputation(compute) =>
-        handleLocalComputation(compute.asInstanceOf[RunContext[S] => Any], ctx, state, stack)
+        handleLocalComputation(compute.asInstanceOf[RunContext => Any], ctx, state, stack)
 
-      case Durable.Activity(compute, backend) =>
-        handleActivity(compute, backend.asInstanceOf[DurableCacheBackend[Any, S]], ctx, state, stack)
+      case Durable.Activity(compute, backend, storage) =>
+        // backend and storage have the same existential S, so types match
+        handleActivity(
+          compute,
+          backend.asInstanceOf[DurableCacheBackend[Any, Any]],
+          storage,
+          ctx,
+          state,
+          stack
+        )
 
       case Durable.Suspend(waitingFor) =>
         Future.successful(WorkflowResult.Suspended(
@@ -93,11 +104,11 @@ object WorkflowRunner:
   /**
    * Continue with a value, applying the next continuation from the stack.
    */
-  private def continueWith[A, S](
+  private def continueWith[A](
     value: Any,
-    ctx: RunContext[S],
+    ctx: RunContext,
     state: InterpreterState,
-    stack: List[Any => Durable[?, S]]
+    stack: List[Any => Durable[?]]
   )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
     stack match
       case Nil =>
@@ -113,11 +124,11 @@ object WorkflowRunner:
   /**
    * Handle local computation - just execute, no caching.
    */
-  private def handleLocalComputation[A, S](
-    compute: RunContext[S] => Any,
-    ctx: RunContext[S],
+  private def handleLocalComputation[A](
+    compute: RunContext => Any,
+    ctx: RunContext,
     state: InterpreterState,
-    stack: List[Any => Durable[?, S]]
+    stack: List[Any => Durable[?]]
   )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
     try
       val result = compute(ctx)
@@ -128,21 +139,23 @@ object WorkflowRunner:
 
   /**
    * Handle Activity - assign index, check cache, execute if needed, cache result.
-   * Uses the backend captured in the Activity node (type-safe, no Any summoning).
+   * Uses the backend and storage captured in the Activity node.
+   * The existential S ties backend and storage together - type-safe operations.
    */
-  private def handleActivity[A, S](
+  private def handleActivity[A](
     compute: () => Future[Any],
-    backend: DurableCacheBackend[Any, S],
-    ctx: RunContext[S],
+    backend: DurableCacheBackend[Any, Any],
+    storage: Any,
+    ctx: RunContext,
     state: InterpreterState,
-    stack: List[Any => Durable[?, S]]
+    stack: List[Any => Durable[?]]
   )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
     // Assign index at runtime
     val index = state.nextIndex()
 
     if state.isReplayingAt(index) then
       // Replaying - retrieve from cache
-      backend.retrieve(ctx.storage, ctx.workflowId, index).transformWith {
+      backend.retrieve(storage, ctx.workflowId, index).transformWith {
         case Success(Some(cached)) =>
           continueWith(cached, ctx, state, stack)
         case Success(None) =>
@@ -156,7 +169,7 @@ object WorkflowRunner:
       // Execute activity, cache result, continue
       compute().transformWith {
         case Success(result) =>
-          backend.store(ctx.storage, ctx.workflowId, index, result).transformWith {
+          backend.store(storage, ctx.workflowId, index, result).transformWith {
             case Success(_) =>
               continueWith(result, ctx, state, stack)
             case Failure(e) =>
@@ -170,21 +183,33 @@ object WorkflowRunner:
 /**
  * Execution context for the workflow runner.
  *
- * @param storage The storage backend instance
+ * Storage is no longer needed here - each Activity captures its own storage.
+ *
  * @param workflowId Unique identifier for this workflow instance
  * @param resumeFromIndex Activity index to resume from (0 = fresh start)
  */
-case class RunContext[S](
-  storage: S,
+case class RunContext(
   workflowId: WorkflowId,
   resumeFromIndex: Int
 )
 
 object RunContext:
   /** Create a fresh context for new workflow execution */
-  def fresh[S](storage: S, workflowId: WorkflowId): RunContext[S] =
-    RunContext(storage, workflowId, 0)
+  def fresh(workflowId: WorkflowId): RunContext =
+    RunContext(workflowId, 0)
 
   /** Create a context for resuming from snapshot */
-  def fromSnapshot[S](storage: S, snapshot: DurableSnapshot): RunContext[S] =
-    RunContext(storage, snapshot.workflowId, snapshot.activityIndex)
+  def fromSnapshot(snapshot: DurableSnapshot): RunContext =
+    RunContext(snapshot.workflowId, snapshot.activityIndex)
+
+
+/**
+ * Snapshot of workflow state for suspension and resumption.
+ *
+ * @param workflowId Unique identifier for the workflow instance
+ * @param activityIndex The activity index to resume from
+ */
+case class DurableSnapshot(
+  workflowId: WorkflowId,
+  activityIndex: Int
+)

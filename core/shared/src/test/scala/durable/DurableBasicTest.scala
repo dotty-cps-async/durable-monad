@@ -9,8 +9,11 @@ import munit.FunSuite
 class DurableBasicTest extends FunSuite:
   import MemoryStorage.memoryDurableCacheBackend
 
+  // Provide storage via given (AppContext pattern)
+  given MemoryStorage = MemoryStorage()
+
   test("pure value") {
-    val durable: Durable[Int, MemoryStorage] = Durable.pure(42)
+    val durable: Durable[Int] = Durable.pure(42)
 
     durable match
       case Durable.Pure(v) => assertEquals(v, 42)
@@ -18,7 +21,7 @@ class DurableBasicTest extends FunSuite:
   }
 
   test("map creates FlatMap with Pure") {
-    val durable = Durable.pure[Int, MemoryStorage](21).map(_ * 2)
+    val durable = Durable.pure[Int](21).map(_ * 2)
 
     durable match
       case Durable.FlatMap(Durable.Pure(21), _) => () // ok
@@ -27,8 +30,8 @@ class DurableBasicTest extends FunSuite:
 
   test("flatMap creates FlatMap") {
     val durable = for
-      a <- Durable.pure[Int, MemoryStorage](10)
-      b <- Durable.pure[Int, MemoryStorage](32)
+      a <- Durable.pure[Int](10)
+      b <- Durable.pure[Int](32)
     yield a + b
 
     // Should be FlatMap(Pure(10), f) where f(10) = FlatMap(Pure(32), g)
@@ -39,7 +42,7 @@ class DurableBasicTest extends FunSuite:
 
   test("local creates LocalComputation node") {
     var computed = false
-    val durable = Durable.local[Int, MemoryStorage] { _ =>
+    val durable = Durable.local[Int] { _ =>
       computed = true
       42
     }
@@ -64,7 +67,7 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _) => () // ok
+      case Durable.Activity(_, _, _) => () // ok - now has 3 fields
       case _ => fail("Expected Activity(...)")
   }
 
@@ -79,12 +82,12 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _) => () // ok
+      case Durable.Activity(_, _, _) => () // ok - now has 3 fields
       case _ => fail("Expected Activity(...)")
   }
 
   test("suspend creates Suspend node") {
-    val durable = Durable.suspend[Unit, MemoryStorage]("waiting for signal")
+    val durable = Durable.suspend[Unit]("waiting for signal")
 
     durable match
       case Durable.Suspend("waiting for signal") => () // ok
@@ -93,7 +96,7 @@ class DurableBasicTest extends FunSuite:
 
   test("error creates Error node") {
     val error = RuntimeException("test error")
-    val durable = Durable.failed[Int, MemoryStorage](error)
+    val durable = Durable.failed[Int](error)
 
     durable match
       case Durable.Error(e) => assertEquals(e.getMessage, "test error")
@@ -105,12 +108,12 @@ class DurableBasicTest extends FunSuite:
     val durable = for
       a <- Durable.activity[Int, MemoryStorage](Future.successful(10))
       b <- Durable.activity[Int, MemoryStorage](Future.successful(20))
-      _ <- Durable.suspend[Unit, MemoryStorage]("wait")
+      _ <- Durable.suspend[Unit]("wait")
       c <- Durable.activity[Int, MemoryStorage](Future.successful(12))
     yield a + b + c
 
     // Just verify it compiles and creates a FlatMap chain
     durable match
-      case Durable.FlatMap(Durable.Activity(_, _), _) => () // ok
+      case Durable.FlatMap(Durable.Activity(_, _, _), _) => () // ok
       case _ => fail("Expected FlatMap(Activity(...), ...)")
   }

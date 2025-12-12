@@ -15,7 +15,7 @@ import scala.concurrent.Future
  * Note: Uses mutable.HashMap for cross-platform compatibility (JVM, JS, Native).
  * For production JVM use with concurrent access, consider a thread-safe implementation.
  */
-class MemoryStorage:
+class MemoryStorage extends DurableStorage:
   private val store: mutable.HashMap[(WorkflowId, Int), Any] = mutable.HashMap.empty
 
   def get(workflowId: WorkflowId, activityIndex: Int): Option[Any] =

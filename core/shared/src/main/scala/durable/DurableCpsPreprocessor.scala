@@ -11,7 +11,8 @@ import cps.*
  * Usage:
  *   import durable.DurableCpsPreprocessor.given
  *
- *   async[[A] =>> Durable[A, MyStorage]] {
+ *   given MemoryStorage = AppContext[MemoryStorage]
+ *   async[Durable] {
  *     val x = compute()        // automatically wrapped with activity
  *     val y = await(external)  // await expressions preserved
  *     x + y
@@ -23,9 +24,10 @@ import cps.*
 object DurableCpsPreprocessor:
 
   /**
-   * CpsPreprocessor for Durable with fixed storage type S.
-   * Context type is DurableCpsContext[S].
+   * CpsPreprocessor for Durable monad.
+   * Context type is DurableCpsContext.
+   * Storage type S is determined at activity creation via AppContext.
    */
-  given durablePreprocessor[S, C <: Durable.DurableCpsContext[S]]: CpsPreprocessor[[A] =>> Durable[A, S], C] with
+  given durablePreprocessor[C <: Durable.DurableCpsContext]: CpsPreprocessor[Durable, C] with
     transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
-      ${ DurablePreprocessor.impl[A, S, C]('body, 'ctx) }
+      ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }

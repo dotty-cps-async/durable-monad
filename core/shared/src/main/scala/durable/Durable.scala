@@ -5,35 +5,38 @@ import scala.util.{Try, Success, Failure}
 import cps.*
 
 /**
- * Durable[A, S] - A Monad describing a durable computation.
+ * Durable[A] - A Monad describing a durable computation.
  *
  * Type parameters:
  *   A - the result type
- *   S - the storage type for caching
+ *
+ * Storage type S is determined via AppContext at activity creation time.
+ * Each Activity captures its own storage instance and backend.
  *
  * This is a data structure describing the computation, not executing it.
  * The runner (interpreter) handles execution, async operations, and storage.
  *
  * Usage with async/await:
- *   async[Durable[*, MyStorage]] {
+ *   given MemoryStorage = AppContext[MemoryStorage]
+ *   async[Durable] {
  *     val a = await(activity1)
  *     await(sleep(1.hour))        // suspends here
  *     val b = await(activity2(a))
  *     b
  *   }
  */
-enum Durable[A, S]:
+enum Durable[A]:
   /** Lift a value */
   case Pure(value: A)
 
   /** Sequencing */
-  case FlatMap[A, B, S](fa: Durable[A, S], f: A => Durable[B, S]) extends Durable[B, S]
+  case FlatMap[A, B](fa: Durable[A], f: A => Durable[B]) extends Durable[B]
 
   /** Error */
   case Error(error: Throwable)
 
   /** Local computation - sync, deterministic, no caching needed. Has access to context. */
-  case LocalComputation(compute: RunContext[S] => A)
+  case LocalComputation(compute: RunContext => A)
 
   /**
    * Activity (outbound operation).
@@ -46,97 +49,103 @@ enum Durable[A, S]:
    *   - If not cached: executes compute, caches result, returns
    *   - Can retry on recoverable failures
    *
-   * The backend is captured at creation time to preserve type safety.
-   * This avoids the need for DurableCacheBackend[Any, S] at runtime.
+   * S is existential - hidden from Durable[A] but ties backend and storage together.
+   * The backend and storage are captured at creation time to preserve type safety.
    */
-  case Activity[A, S](compute: () => Future[A], backend: DurableCacheBackend[A, S]) extends Durable[A, S]
+  case Activity[A, S](
+    compute: () => Future[A],
+    backend: DurableCacheBackend[A, S],
+    storage: S
+  ) extends Durable[A]
 
   /** Suspend for external call (inbound) - timer, signal, etc. */
   case Suspend(waitingFor: String)
 
-  def map[B](f: A => B): Durable[B, S] =
+  def map[B](f: A => B): Durable[B] =
     Durable.FlatMap(this, (a: A) => Durable.Pure(f(a)))
 
-  def flatMap[B](f: A => Durable[B, S]): Durable[B, S] =
+  def flatMap[B](f: A => Durable[B]): Durable[B] =
     Durable.FlatMap(this, f)
 
 
 object Durable:
   /** Lift a pure value */
-  def pure[A, S](a: A): Durable[A, S] =
+  def pure[A](a: A): Durable[A] =
     Pure(a)
 
   /** Lift an error */
-  def failed[A, S](e: Throwable): Durable[A, S] =
+  def failed[A](e: Throwable): Durable[A] =
     Error(e)
 
   /** Local computation - sync, deterministic, no caching */
-  def local[A, S](compute: RunContext[S] => A): Durable[A, S] =
+  def local[A](compute: RunContext => A): Durable[A] =
     LocalComputation(compute)
 
   /**
    * Create an activity - async operation that will be cached.
    * Index is assigned at runtime by the interpreter.
-   * Backend is captured to preserve type safety at runtime.
+   * Backend and storage are captured to preserve type safety at runtime.
+   * Storage is provided via AppContext (using parameter).
    */
-  def activity[A, S](compute: => Future[A])(using backend: DurableCacheBackend[A, S]): Durable[A, S] =
-    Activity(() => compute, backend)
+  def activity[A, S](compute: => Future[A])(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
+    Activity(() => compute, backend, storage)
 
   /**
    * Create an activity from a synchronous computation.
    * Convenience method that wraps the result in Future.successful.
-   * Backend is captured to preserve type safety at runtime.
+   * Backend and storage are captured to preserve type safety at runtime.
+   * Storage is provided via AppContext (using parameter).
    */
-  def activitySync[A, S](compute: => A)(using backend: DurableCacheBackend[A, S]): Durable[A, S] =
-    Activity(() => Future.successful(compute), backend)
+  def activitySync[A, S](compute: => A)(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
+    Activity(() => Future.successful(compute), backend, storage)
 
   /** Suspend the workflow, waiting for external input (inbound) */
-  def suspend[A, S](waitingFor: String): Durable[A, S] =
+  def suspend[A](waitingFor: String): Durable[A] =
     Suspend(waitingFor)
 
   /**
    * CpsMonadContext for Durable - provides context for async/await.
    * Also provides activity methods for the preprocessor to wrap val definitions.
    */
-  class DurableCpsContext[S] extends CpsTryMonadContext[[A] =>> Durable[A, S]]:
-    def monad: CpsTryMonad[[A] =>> Durable[A, S]] = durableCpsTryMonad[S]
+  class DurableCpsContext extends CpsTryMonadContext[[A] =>> Durable[A]]:
+    def monad: CpsTryMonad[[A] =>> Durable[A]] = durableCpsTryMonad
 
     /**
      * Create an activity from an async computation.
      * Used by preprocessor to wrap val definitions.
-     * Backend is captured to preserve type safety at runtime.
+     * Backend and storage are captured to preserve type safety at runtime.
      */
-    def activity[A](compute: => Future[A])(using backend: DurableCacheBackend[A, S]): Durable[A, S] =
+    def activity[A, S](compute: => Future[A])(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
       Durable.activity(compute)
 
     /**
      * Create an activity from a synchronous computation.
      * Wraps the result in Future.successful.
      * Used by preprocessor to wrap val definitions.
-     * Backend is captured to preserve type safety at runtime.
+     * Backend and storage are captured to preserve type safety at runtime.
      */
-    def activitySync[A](compute: => A)(using backend: DurableCacheBackend[A, S]): Durable[A, S] =
+    def activitySync[A, S](compute: => A)(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
       Durable.activitySync(compute)
 
   /**
    * CpsTryMonad instance for async/await syntax.
    */
-  given durableCpsTryMonad[S]: CpsTryMonad[[A] =>> Durable[A, S]] with
-    type Context = DurableCpsContext[S]
+  given durableCpsTryMonad: CpsTryMonad[[A] =>> Durable[A]] with
+    type Context = DurableCpsContext
 
-    def pure[A](a: A): Durable[A, S] = Durable.pure(a)
+    def pure[A](a: A): Durable[A] = Durable.pure(a)
 
-    def map[A, B](fa: Durable[A, S])(f: A => B): Durable[B, S] =
+    def map[A, B](fa: Durable[A])(f: A => B): Durable[B] =
       fa.map(f)
 
-    def flatMap[A, B](fa: Durable[A, S])(f: A => Durable[B, S]): Durable[B, S] =
+    def flatMap[A, B](fa: Durable[A])(f: A => Durable[B]): Durable[B] =
       fa.flatMap(f)
 
-    def error[A](e: Throwable): Durable[A, S] =
+    def error[A](e: Throwable): Durable[A] =
       Durable.failed(e)
 
-    def flatMapTry[A, B](fa: Durable[A, S])(f: Try[A] => Durable[B, S]): Durable[B, S] =
-      FlatMap(fa, (a: A) => f(Success(a))).asInstanceOf[Durable[B, S]] // TODO: handle errors properly
+    def flatMapTry[A, B](fa: Durable[A])(f: Try[A] => Durable[B]): Durable[B] =
+      FlatMap(fa, (a: A) => f(Success(a))).asInstanceOf[Durable[B]] // TODO: handle errors properly
 
-    def apply[A](op: Context => Durable[A, S]): Durable[A, S] =
-      op(new DurableCpsContext[S])
+    def apply[A](op: Context => Durable[A]): Durable[A] =
+      op(new DurableCpsContext)

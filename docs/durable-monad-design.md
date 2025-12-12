@@ -424,27 +424,41 @@ workflow-123/
 - Deterministic during replay - same execution path = same indices
 - Resume uses `resumeFromIndex` to skip already-cached activities
 
-### Type-Safe Backend Capture
+### Type-Safe Backend Capture (Decoupled Storage)
 
-To avoid `DurableCacheBackend[Any, S]` at runtime (which loses type safety), the backend is captured in the Activity node at creation time:
+The monad type is `Durable[A]` - the storage type `S` is NOT part of the monad type.
+Instead, `S` is existential in the Activity node, tying backend and storage together:
 
 ```scala
+// Marker trait for storage types - allows macro to find storage in scope
+trait DurableStorage
+
+// Activity has existential S - hidden from Durable[A]
 case Activity[A, S](
   compute: () => Future[A],
-  backend: DurableCacheBackend[A, S]  // captured when type A is known
-) extends Durable[A, S]
+  backend: DurableCacheBackend[A, S],
+  storage: S  // S is existential - ties backend and storage together
+) extends Durable[A]  // Note: Durable[A], not Durable[A, S]
 ```
 
 This ensures:
 - Type safety at activity creation (compile-time)
-- No type erasure problems at runtime (backend knows its type)
-- No need to summon `DurableCacheBackend[Any, S]` in the interpreter
+- No type erasure problems at runtime (backend and storage have same S)
+- Storage type decoupled from the monad - user writes `Durable[A]`
+- Storage provided via AppContext pattern (`given MemoryStorage = ...`)
 
 ### Runtime Interpreter (WorkflowRunner)
 
-The interpreter tracks activity index and handles replay:
+The interpreter tracks activity index and handles replay.
+Note: `RunContext` no longer needs storage - each Activity carries its own:
 
 ```scala
+// RunContext no longer has storage type parameter
+case class RunContext(
+  workflowId: WorkflowId,
+  resumeFromIndex: Int
+)
+
 object WorkflowRunner {
   private class InterpreterState(val resumeFromIndex: Int) {
     private var _currentIndex: Int = 0
@@ -458,20 +472,21 @@ object WorkflowRunner {
     def isReplayingAt(index: Int): Boolean = index < resumeFromIndex
   }
 
-  def run[A, S](workflow: Durable[A, S], ctx: RunContext[S])
-               (using ec: ExecutionContext): Future[WorkflowResult[A]] = {
+  // No S type parameter - storage is in each Activity
+  def run[A](workflow: Durable[A], ctx: RunContext)
+            (using ec: ExecutionContext): Future[WorkflowResult[A]] = {
     val state = new InterpreterState(ctx.resumeFromIndex)
     step(workflow, ctx, state, Nil)
   }
 
-  // When handling Activity:
-  case Durable.Activity(compute, backend) =>
+  // When handling Activity - backend and storage from the Activity node:
+  case Durable.Activity(compute, backend, storage) =>
     val index = state.nextIndex()
     if (state.isReplayingAt(index))
-      backend.retrieve(ctx.storage, ctx.workflowId, index)  // use cached
+      backend.retrieve(storage, ctx.workflowId, index)  // use cached
     else
       compute().flatMap { result =>
-        backend.store(ctx.storage, ctx.workflowId, index, result)  // cache & continue
+        backend.store(storage, ctx.workflowId, index, result)  // cache & continue
       }
 }
 ```
@@ -507,11 +522,13 @@ given [T: DurableSerializer]: DurableCacheBackend[T, PostgresDB] = ...
 // WorkflowRunner interprets Durable monad and uses captured backends
 // Durable monad is the user-facing API
 
-Future  ←──  DurableCacheBackend[T, S]  ←──  WorkflowRunner  ←──  Durable[A, S]
+Future  ←──  DurableCacheBackend[T, S]  ←──  WorkflowRunner  ←──  Durable[A]
 (base)       (storage)                      (interpreter)        (user API)
 ```
 
 `A ← B` means "B depends on A" / "B uses A"
+
+Note: `Durable[A]` has no S in its type - storage is determined via `given DurableStorage` in scope.
 
 ## dotty-cps-async Integration
 
@@ -519,29 +536,32 @@ Future  ←──  DurableCacheBackend[T, S]  ←──  WorkflowRunner  ←─�
 ### Durable Implementation
 
 ```scala
-given durablePreprocessor[S, C <: Durable.DurableCpsContext[S]]:
-    CpsPreprocessor[[A] =>> Durable[A, S], C] with {
+// Preprocessor for Durable - no S type parameter
+given durablePreprocessor[C <: Durable.DurableCpsContext]: CpsPreprocessor[Durable, C] with
   transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
-    ${ DurablePreprocessor.impl[A, S, C]('body, 'ctx) }
-}
+    ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
 
 object DurablePreprocessor {
-  def impl[A: Type, S: Type, C <: Durable.DurableCpsContext[S]: Type](
+  def impl[A: Type, C <: Durable.DurableCpsContext: Type](
     body: Expr[A],
     ctx: Expr[C]
   )(using Quotes): Expr[A] = {
-    // Walk AST and transform (top-level only):
+    // 1. Find storage type S by searching for DurableStorage given in scope
+    val storageType = Implicits.search(TypeRepr.of[DurableStorage]) match
+      case success => success.tree.tpe.widen
+      case failure => report.errorAndAbort("No DurableStorage found")
+
+    // 2. Walk AST and transform (top-level only):
     //
-    // 1. Val definitions:
-    //    val x = rhs  →  val x = await($ctx.activitySync { rhs })
+    // Val definitions:
+    //    val x = rhs  →  val x = await($ctx.activitySync[A, S] { rhs })
     //
-    // 2. Control flow (auto-cache conditions):
-    //    if (cond) { ... }  →  if (await($ctx.activitySync { cond })) { ... }
+    // Control flow (auto-cache conditions):
+    //    if (cond) { ... }  →  if (await($ctx.activitySync[Boolean, S] { cond })) { ... }
     //
     // SKIP (do not transform inside):
     // - Lambda bodies: x => ...
     // - Nested function bodies: def f(...) = ...
-    // - These are treated as atomic expressions
     ...
   }
 }
@@ -549,19 +569,20 @@ object DurablePreprocessor {
 // Example transformation:
 //
 // Source:
-//   async[[A] =>> Durable[A, S]] {
+//   given MemoryStorage = MemoryStorage()
+//   async[Durable] {
 //     val a = compute()
 //     val b = list.map(x => process(x))  // lambda untouched
 //     val c = await(op)
 //     val d = transform(c)
 //   }
 //
-// After preprocessing (ctx is DurableCpsContext[S]):
-//   async[[A] =>> Durable[A, S]] {
-//     val a = await(ctx.activitySync { compute() })       // index assigned at runtime
-//     val b = await(ctx.activitySync { list.map(...) })   // whole result cached
-//     val c = await(op)                                    // await preserved
-//     val d = await(ctx.activitySync { transform(c) })    // index assigned at runtime
+// After preprocessing:
+//   async[Durable] {
+//     val a = await(ctx.activitySync[Int, MemoryStorage] { compute() })
+//     val b = await(ctx.activitySync[List[X], MemoryStorage] { list.map(...) })
+//     val c = await(op)
+//     val d = await(ctx.activitySync[Y, MemoryStorage] { transform(c) })
 //   }
 ```
 

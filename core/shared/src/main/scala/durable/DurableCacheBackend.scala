@@ -3,6 +3,13 @@ package durable
 import scala.concurrent.Future
 
 /**
+ * Marker trait for durable storage types.
+ * All storage implementations (MemoryStorage, PostgresDB, etc.) should extend this.
+ * This allows the macro to find the storage type in scope.
+ */
+trait DurableStorage
+
+/**
  * Async storage backend for caching durable computation results.
  *
  * Type parameters:

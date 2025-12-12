@@ -23,16 +23,13 @@ object DurablePreprocessor:
    * Main preprocessing implementation.
    * Transforms only top-level statements - does NOT descend recursively.
    */
-  def impl[A: Type, S: Type, C <: Durable.DurableCpsContext[S]: Type](
+  def impl[A: Type, C <: Durable.DurableCpsContext: Type](
     body: Expr[A],
     ctx: Expr[C]
   )(using Quotes): Expr[A] =
     import quotes.reflect.*
 
     val awaitSymbol = Symbol.requiredMethod("cps.await")
-
-    // Type alias for Durable with fixed S
-    type DurableS[X] = Durable[X, S]
 
     // Recursively widen union types - handles cases like 10 | 42 | 0 -> Int
     def widenAll(tpe: TypeRepr): TypeRepr = tpe match
@@ -42,34 +39,47 @@ object DurablePreprocessor:
         if l =:= r then l else OrType(l, r)
       case other => other.widen
 
+    // Find storage type S by searching for DurableStorage given in scope
+    lazy val storageType: TypeRepr =
+      Implicits.search(TypeRepr.of[DurableStorage]) match
+        case iss: ImplicitSearchSuccess =>
+          // Get the concrete storage type (e.g., MemoryStorage)
+          iss.tree.tpe.widen
+        case isf: ImplicitSearchFailure =>
+          report.errorAndAbort("No DurableStorage found. Ensure a given storage (e.g., given MemoryStorage = ...) is in scope.")
+
     def wrapWithActivity(expr: Term): Term =
       val exprType = widenAll(expr.tpe)
 
-      // Build: ctx.activitySync { expr }
+      // Build: ctx.activitySync[A, S](expr)
+      // A is from expr type, S is the storage type found above
       val activityCall = Apply(
         TypeApply(
           Select.unique(ctx.asTerm, "activitySync"),
-          List(TypeTree.of(using exprType.asType))
+          List(
+            TypeTree.of(using exprType.asType),
+            TypeTree.of(using storageType.asType)
+          )
         ),
         List(expr)
       )
 
-      // Build: await[DurableS, T, DurableS](activityCall)(using ctx, identityConversion)
+      // Build: await[Durable, T, Durable](activityCall)(using ctx, identityConversion)
       // await is: extension [F[_], T, G[_]](f: F[T])(using ctx: CpsMonadContext[G], conversion: CpsMonadConversion[F, G]).await: T
       val awaitRef = Ref(Symbol.requiredMethod("cps.await"))
       val awaitWithTypes = TypeApply(
         awaitRef,
         List(
-          TypeTree.of[DurableS],
+          TypeTree.of[Durable],
           TypeTree.of(using exprType.asType),
-          TypeTree.of[DurableS]
+          TypeTree.of[Durable]
         )
       )
       // First apply: the value F[T]
       val awaitApply1 = Apply(awaitWithTypes, List(activityCall))
       // Second apply: the using parameters (ctx, conversion)
       val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))
-      val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[DurableS]))
+      val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
       Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
 
     /**
