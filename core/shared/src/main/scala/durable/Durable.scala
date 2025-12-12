@@ -5,7 +5,7 @@ import scala.util.{Try, Success, Failure}
 import cps.*
 
 /**
- * Durable[A, S] - A Free Monad describing a durable computation.
+ * Durable[A, S] - A Monad describing a durable computation.
  *
  * Type parameters:
  *   A - the result type
