@@ -10,13 +10,13 @@ import munit.FunSuite
 class WorkflowRunnerTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
-  import MemoryStorage.memoryDurableCacheBackend
 
-  // Provide storage via given (AppContext pattern)
-  // Each test creates its own storage instance for isolation
-  def withStorage[A](f: MemoryStorage ?=> A): A =
-    given MemoryStorage = MemoryStorage()
-    f
+  // Helper to run tests with isolated storage
+  def withStorage[A](f: (MemoryBackingStore, DurableStorage[Any]) ?=> A): A =
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
+    f(using backing, backing.forType[Any])
 
   test("run pure value") {
     withStorage {
@@ -75,12 +75,13 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run activity - executes and caches") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("test-5"))
 
     var executeCount = 0
-    val workflow = Durable.activity[Int, MemoryStorage] {
+    val workflow = Durable.activity[Int] {
       executeCount += 1
       Future.successful(42)
     }
@@ -88,21 +89,22 @@ class WorkflowRunnerTest extends FunSuite:
     WorkflowRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowResult.Completed(42))
       assertEquals(executeCount, 1)
-      assertEquals(storage.size, 1)
+      assertEquals(backing.size, 1)
     }
   }
 
   test("run activity - replays from cache") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     // Pre-populate cache at index 0
-    storage.put(WorkflowId("test-6"), 0, 42)
+    backing.put(WorkflowId("test-6"), 0, Right(42))
 
     // Resume from index 1 (after index 0 is cached)
     val ctx = RunContext(WorkflowId("test-6"), resumeFromIndex = 1)
 
     var executeCount = 0
-    val workflow = Durable.activity[Int, MemoryStorage] {
+    val workflow = Durable.activity[Int] {
       executeCount += 1
       Future.successful(999) // different value - should NOT be used
     }
@@ -119,14 +121,16 @@ class WorkflowRunnerTest extends FunSuite:
 
       val workflow = for
         a <- Durable.pure[Int](10)
-        _ <- Durable.suspend[Unit]("waiting for signal")
+        _ <- Durable.suspend(WaitCondition.Event[Unit]("waiting for signal"))
         b <- Durable.pure[Int](32)
       yield a + b
 
       WorkflowRunner.run(workflow, ctx).map { result =>
         assert(result.isInstanceOf[WorkflowResult.Suspended[?]])
         val suspended = result.asInstanceOf[WorkflowResult.Suspended[Int]]
-        assertEquals(suspended.waitingFor, "waiting for signal")
+        suspended.condition match
+          case WaitCondition.Event(name) => assertEquals(name, "waiting for signal")
+          case _ => fail("Expected Event condition")
       }
     }
   }
@@ -150,47 +154,49 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run multiple activities in sequence") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("test-9"))
 
     var executeCount = 0
     val workflow = for
-      a <- Durable.activity[Int, MemoryStorage] { executeCount += 1; Future.successful(10) }
-      b <- Durable.activity[Int, MemoryStorage] { executeCount += 1; Future.successful(20) }
-      c <- Durable.activity[Int, MemoryStorage] { executeCount += 1; Future.successful(12) }
+      a <- Durable.activity[Int] { executeCount += 1; Future.successful(10) }
+      b <- Durable.activity[Int] { executeCount += 1; Future.successful(20) }
+      c <- Durable.activity[Int] { executeCount += 1; Future.successful(12) }
     yield a + b + c
 
     WorkflowRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowResult.Completed(42))
       assertEquals(executeCount, 3)
-      assertEquals(storage.size, 3)
+      assertEquals(backing.size, 3)
     }
   }
 
   test("run replay from middle") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val workflowId = WorkflowId("test-10")
 
     // Pre-populate cache with first two values (indices 0 and 1)
-    storage.put(workflowId, 0, 10)
-    storage.put(workflowId, 1, 20)
+    backing.put(workflowId, 0, Right(10))
+    backing.put(workflowId, 1, Right(20))
 
     // Resume from index 2 (first two cached)
     val ctx = RunContext(workflowId, resumeFromIndex = 2)
 
     var executeCount = 0
     val workflow = for
-      a <- Durable.activity[Int, MemoryStorage] { executeCount += 1; Future.successful(10) }
-      b <- Durable.activity[Int, MemoryStorage] { executeCount += 1; Future.successful(20) }
-      c <- Durable.activity[Int, MemoryStorage] { executeCount += 1; Future.successful(12) }
+      a <- Durable.activity[Int] { executeCount += 1; Future.successful(10) }
+      b <- Durable.activity[Int] { executeCount += 1; Future.successful(20) }
+      c <- Durable.activity[Int] { executeCount += 1; Future.successful(12) }
     yield a + b + c
 
     WorkflowRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowResult.Completed(42))
       assertEquals(executeCount, 1) // Only c executed
-      assertEquals(storage.size, 3) // All three now cached
+      assertEquals(backing.size, 3) // All three now cached
     }
   }
 
@@ -209,12 +215,13 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("activity result is cached") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("test-12"))
 
     var callCount = 0
-    val workflow = Durable.activity[Int, MemoryStorage] {
+    val workflow = Durable.activity[Int] {
       callCount += 1
       Future.successful(42)
     }
@@ -222,6 +229,6 @@ class WorkflowRunnerTest extends FunSuite:
     WorkflowRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowResult.Completed(42))
       assertEquals(callCount, 1)
-      assertEquals(storage.size, 1) // Result was cached
+      assertEquals(backing.size, 1) // Result was cached
     }
   }

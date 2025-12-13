@@ -10,8 +10,10 @@ import cps.*
  *
  * Usage:
  *   import durable.DurableCpsPreprocessor.given
+ *   import cpsembed.syntax.appcontext.*
  *
- *   given MemoryStorage = AppContext[MemoryStorage]
+ *   given MemoryBackingStore = AppContext[MemoryBackingStore]
+ *   given [T]: DurableStorage[T] = summon[MemoryBackingStore].forType[T]
  *   async[Durable] {
  *     val x = compute()        // automatically wrapped with activity
  *     val y = await(external)  // await expressions preserved
@@ -26,7 +28,7 @@ object DurableCpsPreprocessor:
   /**
    * CpsPreprocessor for Durable monad.
    * Context type is DurableCpsContext.
-   * Storage type S is determined at activity creation via AppContext.
+   * DurableStorage[T] is resolved via normal given resolution.
    */
   given durablePreprocessor[C <: Durable.DurableCpsContext]: CpsPreprocessor[Durable, C] with
     transparent inline def preprocess[A](inline body: A, inline ctx: C): A =

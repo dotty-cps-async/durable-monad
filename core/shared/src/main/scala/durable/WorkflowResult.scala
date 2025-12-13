@@ -9,8 +9,8 @@ enum WorkflowResult[+A]:
   /** Workflow completed successfully with a result */
   case Completed(value: A)
 
-  /** Workflow suspended, waiting for external input (inbound) */
-  case Suspended(snapshot: DurableSnapshot, waitingFor: String)
+  /** Workflow suspended, waiting for external input */
+  case Suspended(snapshot: DurableSnapshot, condition: WaitCondition[?])
 
   /** Workflow failed with an error */
   case Failed(error: Throwable)

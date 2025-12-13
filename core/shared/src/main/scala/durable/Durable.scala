@@ -1,7 +1,9 @@
 package durable
 
 import scala.concurrent.Future
+import scala.concurrent.duration.FiniteDuration
 import scala.util.{Try, Success, Failure}
+import java.time.Instant
 import cps.*
 
 /**
@@ -10,14 +12,14 @@ import cps.*
  * Type parameters:
  *   A - the result type
  *
- * Storage type S is determined via AppContext at activity creation time.
- * Each Activity captures its own storage instance and backend.
+ * Each Activity captures a DurableStorage[A] instance for caching.
  *
  * This is a data structure describing the computation, not executing it.
  * The runner (interpreter) handles execution, async operations, and storage.
  *
  * Usage with async/await:
- *   given MemoryStorage = AppContext[MemoryStorage]
+ *   given backing: MemoryBackingStore = MemoryBackingStore()
+ *   given [T]: DurableStorage[T] = backing.forType[T]
  *   async[Durable] {
  *     val a = await(activity1)
  *     await(sleep(1.hour))        // suspends here
@@ -46,20 +48,22 @@ enum Durable[A]:
    * On interpretation:
    *   - Runner assigns index (runtime counter)
    *   - Checks storage: if cached, returns cached value
-   *   - If not cached: executes compute, caches result, returns
-   *   - Can retry on recoverable failures
+   *   - If not cached: executes compute with retry policy, caches result, returns
+   *   - Retries on recoverable failures according to retryPolicy
    *
-   * S is existential - hidden from Durable[A] but ties backend and storage together.
-   * The backend and storage are captured at creation time to preserve type safety.
+   * Storage and retryPolicy are captured at creation time via given resolution.
    */
-  case Activity[A, S](
+  case Activity[A](
     compute: () => Future[A],
-    backend: DurableCacheBackend[A, S],
-    storage: S
+    storage: DurableStorage[A],
+    retryPolicy: RetryPolicy
   ) extends Durable[A]
 
-  /** Suspend for external call (inbound) - timer, signal, etc. */
-  case Suspend(waitingFor: String)
+  /** Suspend for external input - timer, event, child workflow, etc. */
+  case Suspend[A](condition: WaitCondition[A]) extends Durable[A]
+
+  /** Try/catch semantics - handles both success and failure of fa */
+  case FlatMapTry[A, B](fa: Durable[A], f: Try[A] => Durable[B]) extends Durable[B]
 
   def map[B](f: A => B): Durable[B] =
     Durable.FlatMap(this, (a: A) => Durable.Pure(f(a)))
@@ -84,24 +88,38 @@ object Durable:
   /**
    * Create an activity - async operation that will be cached.
    * Index is assigned at runtime by the interpreter.
-   * Backend and storage are captured to preserve type safety at runtime.
-   * Storage is provided via AppContext (using parameter).
+   * Storage is captured via given resolution.
+   * Policy defaults to RetryPolicy.default.
    */
-  def activity[A, S](compute: => Future[A])(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
-    Activity(() => compute, backend, storage)
+  def activity[A](compute: => Future[A], policy: RetryPolicy = RetryPolicy.default)
+                 (using storage: DurableStorage[A]): Durable[A] =
+    Activity(() => compute, storage, policy)
 
   /**
    * Create an activity from a synchronous computation.
    * Convenience method that wraps the result in Future.successful.
-   * Backend and storage are captured to preserve type safety at runtime.
-   * Storage is provided via AppContext (using parameter).
+   * Storage is captured via given resolution.
+   * Policy defaults to RetryPolicy.default.
    */
-  def activitySync[A, S](compute: => A)(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
-    Activity(() => Future.successful(compute), backend, storage)
+  def activitySync[A](compute: => A, policy: RetryPolicy = RetryPolicy.default)
+                     (using storage: DurableStorage[A]): Durable[A] =
+    Activity(() => Future.successful(compute), storage, policy)
 
-  /** Suspend the workflow, waiting for external input (inbound) */
-  def suspend[A](waitingFor: String): Durable[A] =
-    Suspend(waitingFor)
+  /** Suspend the workflow with a wait condition */
+  def suspend[A](condition: WaitCondition[A]): Durable[A] =
+    Suspend(condition)
+
+  /** Sleep until a specific instant, returns actual wake time */
+  def sleepUntil(wakeAt: Instant): Durable[Instant] =
+    Suspend(WaitCondition.Timer(wakeAt))
+
+  /** Sleep for a duration, returns actual wake time */
+  def sleep(duration: FiniteDuration): Durable[Instant] =
+    sleepUntil(Instant.now().plusMillis(duration.toMillis))
+
+  /** Wait for a broadcast event of type E */
+  def awaitEvent[E](using eventName: DurableEventName[E], storage: DurableStorage[E]): Durable[E] =
+    Suspend(WaitCondition.Event(eventName.name))
 
   /**
    * CpsMonadContext for Durable - provides context for async/await.
@@ -113,19 +131,21 @@ object Durable:
     /**
      * Create an activity from an async computation.
      * Used by preprocessor to wrap val definitions.
-     * Backend and storage are captured to preserve type safety at runtime.
+     * Takes explicit policy parameter - preprocessor passes RetryPolicy.default.
      */
-    def activity[A, S](compute: => Future[A])(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
-      Durable.activity(compute)
+    def activity[A](compute: => Future[A], policy: RetryPolicy)
+                   (using storage: DurableStorage[A]): Durable[A] =
+      Durable.Activity(() => compute, storage, policy)
 
     /**
      * Create an activity from a synchronous computation.
      * Wraps the result in Future.successful.
      * Used by preprocessor to wrap val definitions.
-     * Backend and storage are captured to preserve type safety at runtime.
+     * Takes explicit policy parameter - preprocessor passes RetryPolicy.default.
      */
-    def activitySync[A, S](compute: => A)(using backend: DurableCacheBackend[A, S], storage: S): Durable[A] =
-      Durable.activitySync(compute)
+    def activitySync[A](compute: => A, policy: RetryPolicy)
+                       (using storage: DurableStorage[A]): Durable[A] =
+      Durable.Activity(() => Future.successful(compute), storage, policy)
 
   /**
    * CpsTryMonad instance for async/await syntax.
@@ -145,7 +165,7 @@ object Durable:
       Durable.failed(e)
 
     def flatMapTry[A, B](fa: Durable[A])(f: Try[A] => Durable[B]): Durable[B] =
-      FlatMap(fa, (a: A) => f(Success(a))).asInstanceOf[Durable[B]] // TODO: handle errors properly
+      FlatMapTry(fa, f)
 
     def apply[A](op: Context => Durable[A]): Durable[A] =
       op(new DurableCpsContext)

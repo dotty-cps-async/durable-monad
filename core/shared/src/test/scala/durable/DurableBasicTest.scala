@@ -7,10 +7,10 @@ import munit.FunSuite
  * These test the data structure, not execution (which requires a runner).
  */
 class DurableBasicTest extends FunSuite:
-  import MemoryStorage.memoryDurableCacheBackend
 
-  // Provide storage via given (AppContext pattern)
-  given MemoryStorage = MemoryStorage()
+  // Provide storage via given (MemoryBackingStore pattern)
+  given backing: MemoryBackingStore = MemoryBackingStore()
+  given [T]: DurableStorage[T] = backing.forType[T]
 
   test("pure value") {
     val durable: Durable[Int] = Durable.pure(42)
@@ -58,7 +58,7 @@ class DurableBasicTest extends FunSuite:
   test("activity creates Activity node") {
     import scala.concurrent.Future
     var computed = false
-    val durable = Durable.activity[Int, MemoryStorage] {
+    val durable = Durable.activity[Int] {
       computed = true
       Future.successful(42)
     }
@@ -67,13 +67,13 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _, _) => () // ok - now has 3 fields
+      case Durable.Activity(_, _, _) => () // ok - now has 3 fields (compute, storage, retryPolicy)
       case _ => fail("Expected Activity(...)")
   }
 
   test("activitySync creates Activity node") {
     var computed = false
-    val durable = Durable.activitySync[Int, MemoryStorage] {
+    val durable = Durable.activitySync[Int] {
       computed = true
       42
     }
@@ -82,16 +82,17 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _, _) => () // ok - now has 3 fields
+      case Durable.Activity(_, _, _) => () // ok - now has 3 fields (compute, storage, retryPolicy)
       case _ => fail("Expected Activity(...)")
   }
 
   test("suspend creates Suspend node") {
-    val durable = Durable.suspend[Unit]("waiting for signal")
+    val condition = WaitCondition.Event[String]("test-event")
+    val durable = Durable.suspend(condition)
 
     durable match
-      case Durable.Suspend("waiting for signal") => () // ok
-      case _ => fail("Expected Suspend")
+      case Durable.Suspend(WaitCondition.Event("test-event")) => () // ok
+      case _ => fail("Expected Suspend with Event condition")
   }
 
   test("error creates Error node") {
@@ -106,10 +107,10 @@ class DurableBasicTest extends FunSuite:
   test("complex workflow builds correct structure") {
     import scala.concurrent.Future
     val durable = for
-      a <- Durable.activity[Int, MemoryStorage](Future.successful(10))
-      b <- Durable.activity[Int, MemoryStorage](Future.successful(20))
-      _ <- Durable.suspend[Unit]("wait")
-      c <- Durable.activity[Int, MemoryStorage](Future.successful(12))
+      a <- Durable.activity[Int](Future.successful(10))
+      b <- Durable.activity[Int](Future.successful(20))
+      _ <- Durable.suspend(WaitCondition.Event[Unit]("wait"))
+      c <- Durable.activity[Int](Future.successful(12))
     yield a + b + c
 
     // Just verify it compiles and creates a FlatMap chain

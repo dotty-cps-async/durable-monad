@@ -16,6 +16,8 @@ import cps.*
  *   - Transforms top-level vals and control flow
  *   - DOES NOT transform inside lambdas (x => ...) - treated as atomic
  *   - DOES NOT transform inside nested defs - treated as atomic
+ *
+ * DurableStorage[A] is resolved via normal given resolution at each activity site.
  */
 object DurablePreprocessor:
 
@@ -39,29 +41,27 @@ object DurablePreprocessor:
         if l =:= r then l else OrType(l, r)
       case other => other.widen
 
-    // Find storage type S by searching for DurableStorage given in scope
-    lazy val storageType: TypeRepr =
-      Implicits.search(TypeRepr.of[DurableStorage]) match
-        case iss: ImplicitSearchSuccess =>
-          // Get the concrete storage type (e.g., MemoryStorage)
-          iss.tree.tpe.widen
-        case isf: ImplicitSearchFailure =>
-          report.errorAndAbort("No DurableStorage found. Ensure a given storage (e.g., given MemoryStorage = ...) is in scope.")
-
     def wrapWithActivity(expr: Term): Term =
       val exprType = widenAll(expr.tpe)
 
-      // Build: ctx.activitySync[A, S](expr)
-      // A is from expr type, S is the storage type found above
+      // Build: ctx.activitySync[A](expr, RetryPolicy.default)
+      // DurableStorage[A] is resolved via normal given resolution
+      // We use RetryPolicy.default for preprocessor-generated activities
+      // Users can override by using Durable.activity(..., customPolicy) directly
+
+      // Get RetryPolicy.default
+      val retryPolicyModule = Symbol.requiredModule("durable.RetryPolicy")
+      val defaultPolicy = Select(Ref(retryPolicyModule), retryPolicyModule.fieldMember("default"))
+
+      // Build: ctx.activitySync[A](expr, RetryPolicy.default)
       val activityCall = Apply(
         TypeApply(
           Select.unique(ctx.asTerm, "activitySync"),
           List(
-            TypeTree.of(using exprType.asType),
-            TypeTree.of(using storageType.asType)
+            TypeTree.of(using exprType.asType)
           )
         ),
-        List(expr)
+        List(expr, defaultPolicy)
       )
 
       // Build: await[Durable, T, Durable](activityCall)(using ctx, identityConversion)
@@ -81,6 +81,91 @@ object DurablePreprocessor:
       val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))
       val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
       Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
+
+    /**
+     * Transform a catch case pattern to also match ReplayedException.
+     *
+     * Transforms: case e: SomeException => body
+     * To: case e @ (_: SomeException | _: ReplayedException) if ReplayedException.matches[SomeException](e) => body
+     *
+     * This allows catch blocks to handle both original exceptions and replayed exceptions
+     * transparently. The user's code doesn't need to change.
+     */
+    def transformCatchCase(caseDef: CaseDef, isReturnPosition: Boolean): CaseDef =
+      caseDef.pattern match
+        // Pattern: e: SomeException (Bind with Typed)
+        case bind @ Bind(name, typed @ Typed(_, tpt)) if isThrowableType(tpt.tpe) =>
+          val exceptionType = tpt.tpe
+          val replayedExceptionType = TypeRepr.of[ReplayedException]
+
+          // Build: _: SomeException | _: ReplayedException
+          val wildcardOriginal = Typed(Wildcard(), tpt)
+          val wildcardReplayed = Typed(Wildcard(), TypeTree.of[ReplayedException])
+          val alternativePattern = Alternatives(List(wildcardOriginal, wildcardReplayed))
+
+          // Build: e @ (_: SomeException | _: ReplayedException)
+          val newPattern = Bind(bind.symbol, alternativePattern)
+
+          // Build guard: ReplayedException.matches[SomeException](e)
+          val replayedModule = Ref(Symbol.requiredModule("durable.ReplayedException"))
+          val matchesMethod = Select(replayedModule, replayedModule.symbol.methodMember("matches").head)
+          val matchesTyped = TypeApply(matchesMethod, List(TypeTree.of(using exceptionType.asType)))
+          val boundVar = Ref(bind.symbol)
+          val guardExpr = Apply(matchesTyped, List(boundVar))
+
+          // Combine with existing guard if present
+          val combinedGuard = caseDef.guard match
+            case Some(existingGuard) =>
+              // existingGuard && ReplayedException.matches[T](e)
+              val andMethod = Select.unique(existingGuard, "&&")
+              Some(Apply(andMethod, List(guardExpr)))
+            case None =>
+              Some(guardExpr)
+
+          CaseDef(newPattern, combinedGuard, transformTopLevel(caseDef.rhs, isReturnPosition))
+
+        // Pattern: _: SomeException (Typed without Bind)
+        case typed @ Typed(Wildcard(), tpt) if isThrowableType(tpt.tpe) =>
+          val exceptionType = tpt.tpe
+
+          // Build: _: SomeException | _: ReplayedException
+          val wildcardOriginal = Typed(Wildcard(), tpt)
+          val wildcardReplayed = Typed(Wildcard(), TypeTree.of[ReplayedException])
+          val alternativePattern = Alternatives(List(wildcardOriginal, wildcardReplayed))
+
+          // For wildcard patterns without binding, we need to create a temporary binding for the guard
+          // Build: _tmp @ (_: SomeException | _: ReplayedException)
+          val tmpName = "_$replayGuard"
+          val tmpSymbol = Symbol.newVal(Symbol.spliceOwner, tmpName, TypeRepr.of[Throwable], Flags.EmptyFlags, Symbol.noSymbol)
+          val newPattern = Bind(tmpSymbol, alternativePattern)
+
+          // Build guard: ReplayedException.matches[SomeException](_tmp)
+          val replayedModule = Ref(Symbol.requiredModule("durable.ReplayedException"))
+          val matchesMethod = Select(replayedModule, replayedModule.symbol.methodMember("matches").head)
+          val matchesTyped = TypeApply(matchesMethod, List(TypeTree.of(using exceptionType.asType)))
+          val tmpRef = Ref(tmpSymbol)
+          val guardExpr = Apply(matchesTyped, List(tmpRef))
+
+          // Combine with existing guard
+          val combinedGuard = caseDef.guard match
+            case Some(existingGuard) =>
+              Some(Apply(Select.unique(existingGuard, "&&"), List(guardExpr)))
+            case None =>
+              Some(guardExpr)
+
+          CaseDef(newPattern, combinedGuard, transformTopLevel(caseDef.rhs, isReturnPosition))
+
+        // Other patterns (e.g., case _ =>, case e =>) - just transform RHS
+        case _ =>
+          CaseDef.copy(caseDef)(
+            caseDef.pattern,
+            caseDef.guard,
+            transformTopLevel(caseDef.rhs, isReturnPosition)
+          )
+
+    /** Check if a type is a subtype of Throwable */
+    def isThrowableType(tpe: TypeRepr): Boolean =
+      tpe <:< TypeRepr.of[Throwable]
 
     /**
      * Transform a statement at top level.
@@ -142,14 +227,10 @@ object DurablePreprocessor:
           }
           Match.copy(matchTerm)(wrappedScrutinee, transformedCases)
 
-        // Try-catch - recurse into body and cases
+        // Try-catch - recurse into body and transform catch cases for ReplayedException
         case tryTerm @ Try(body, cases, finalizer) =>
           val transformedCases = cases.map { caseDef =>
-            CaseDef.copy(caseDef)(
-              caseDef.pattern,
-              caseDef.guard,
-              transformTopLevel(caseDef.rhs, isReturnPosition)
-            )
+            transformCatchCase(caseDef, isReturnPosition)
           }
           Try.copy(tryTerm)(
             transformTopLevel(body, isReturnPosition),

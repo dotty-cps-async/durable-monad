@@ -12,12 +12,12 @@ import cps.*
 class DurablePreprocessorTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
-  import MemoryStorage.memoryDurableCacheBackend
   import DurableCpsPreprocessor.given
 
   test("async block with single val") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-1"))
 
     var computeCount = 0
@@ -32,13 +32,14 @@ class DurablePreprocessorTest extends FunSuite:
     WorkflowRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowResult.Completed(42))
       assertEquals(computeCount, 1)
-      assertEquals(storage.size, 1) // val was cached
+      assertEquals(backing.size, 1) // val was cached
     }
   }
 
   test("async block with multiple vals") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-2"))
 
     var computeCount = 0
@@ -52,13 +53,14 @@ class DurablePreprocessorTest extends FunSuite:
     WorkflowRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowResult.Completed(42))
       assertEquals(computeCount, 3)
-      assertEquals(storage.size, 3) // all vals cached
+      assertEquals(backing.size, 3) // all vals cached
     }
   }
 
   test("async block replays from cache") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val workflowId = WorkflowId("preprocess-3")
 
     // First run - compute and cache
@@ -85,8 +87,9 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block with if expression") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-4"))
 
     var condCount = 0
@@ -113,8 +116,9 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block with nested block") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-5"))
 
     var outerCount = 0
@@ -138,8 +142,9 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block with match expression") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-6"))
 
     var scrutineeCount = 0
@@ -162,23 +167,23 @@ class DurablePreprocessorTest extends FunSuite:
     }
   }
 
-  test("preprocessor finds correct storage type via DurableStorage") {
-    val storage = MemoryStorage()
-    given MemoryStorage = storage
+  test("preprocessor captures DurableStorage in Activity") {
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
 
-    // Create a workflow via async - the preprocessor should find MemoryStorage
+    // Create a workflow via async - the preprocessor should capture DurableStorage
     val workflow = async[Durable] {
       val x = 42
       x
     }
 
-    // Verify the Activity node contains MemoryStorage as its storage
+    // Verify the Activity node contains a DurableStorage
     workflow match
-      case Durable.FlatMap(Durable.Activity(_, _, capturedStorage), _) =>
-        // The captured storage should be the same MemoryStorage instance
-        assert(capturedStorage.isInstanceOf[MemoryStorage],
-          s"Expected MemoryStorage but got ${capturedStorage.getClass.getName}")
-        assertEquals(capturedStorage.asInstanceOf[MemoryStorage], storage)
+      case Durable.FlatMap(Durable.Activity(_, capturedStorage, _), _) =>
+        // The captured storage should be a DurableStorage instance
+        assert(capturedStorage.isInstanceOf[DurableStorage[?]],
+          s"Expected DurableStorage but got ${capturedStorage.getClass.getName}")
       case other =>
         fail(s"Expected FlatMap(Activity(...), ...) but got ${other.getClass.getSimpleName}")
   }
@@ -194,7 +199,7 @@ class DurablePreprocessorTest extends FunSuite:
       import durable.DurableCpsPreprocessor.given
       import cps.*
 
-      // Note: NO given MemoryStorage here!
+      // Note: NO given DurableStorage here!
       val workflow = async[Durable] {
         val x = 42
         x
@@ -202,6 +207,112 @@ class DurablePreprocessorTest extends FunSuite:
     """)
 
     assert(errors.nonEmpty, "Expected a compile error when no DurableStorage is in scope")
-    assert(errors.exists(_.message.contains("No DurableStorage found")),
-      s"Expected error about missing DurableStorage, but got: ${errors.map(_.message).mkString(", ")}")
+    // The error message should mention DurableStorage[Int] since x = 42 is an Int
+    assert(errors.exists(_.message.contains("DurableStorage[Int]")),
+      s"Expected error about missing DurableStorage[Int], but got: ${errors.map(_.message).mkString(", ")}")
+  }
+
+  test("non-deterministic condition in if is cached and replayed") {
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
+    val workflowId = WorkflowId("preprocess-nondet")
+
+    // Simulate non-deterministic condition with a counter
+    // First call returns true, subsequent calls would return false
+    var condCallCount = 0
+    def nonDeterministicCondition(): Boolean = {
+      condCallCount += 1
+      condCallCount == 1  // true on first call, false on subsequent
+    }
+
+    var thenCount = 0
+    var elseCount = 0
+
+    val workflow = async[Durable] {
+      val result = if (nonDeterministicCondition()) {
+        thenCount += 1
+        42
+      } else {
+        elseCount += 1
+        0
+      }
+      result
+    }
+
+    // First run - condition is true, takes then branch
+    val ctx1 = RunContext.fresh(workflowId)
+    WorkflowRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowResult.Completed(42))
+      assertEquals(condCallCount, 1)  // condition evaluated once
+      assertEquals(thenCount, 1)
+      assertEquals(elseCount, 0)
+
+      // Reset counters for replay
+      condCallCount = 0
+      thenCount = 0
+      elseCount = 0
+
+      // Second run (replay) - should use cached condition value (true)
+      // even though nonDeterministicCondition() would now return false
+      val ctx2 = RunContext(workflowId, resumeFromIndex = 2)  // both condition and result cached
+      WorkflowRunner.run(workflow, ctx2).map { result2 =>
+        assertEquals(result2, WorkflowResult.Completed(42))  // same result
+        assertEquals(condCallCount, 0)  // condition NOT re-evaluated
+        assertEquals(thenCount, 0)  // then branch NOT re-executed
+        assertEquals(elseCount, 0)  // else branch NOT executed either
+      }
+    }
+  }
+
+  test("non-deterministic scrutinee in match is cached and replayed") {
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
+    val workflowId = WorkflowId("preprocess-match-nondet")
+
+    // Simulate non-deterministic scrutinee with a counter
+    // First call returns 1, subsequent calls would return 2
+    var scrutineeCallCount = 0
+    def nonDeterministicValue(): Int = {
+      scrutineeCallCount += 1
+      if (scrutineeCallCount == 1) 1 else 2
+    }
+
+    var case1Count = 0
+    var case2Count = 0
+
+    val workflow = async[Durable] {
+      val x = nonDeterministicValue()
+      val result: Int = x match {
+        case 1 => { case1Count += 1; 42 }
+        case 2 => { case2Count += 1; 0 }
+        case _ => -1
+      }
+      result
+    }
+
+    // First run - scrutinee is 1, takes case 1
+    val ctx1 = RunContext.fresh(workflowId)
+    WorkflowRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowResult.Completed(42))
+      assertEquals(scrutineeCallCount, 1)  // scrutinee evaluated once
+      assertEquals(case1Count, 1)
+      assertEquals(case2Count, 0)
+
+      // Reset counters for replay
+      scrutineeCallCount = 0
+      case1Count = 0
+      case2Count = 0
+
+      // Second run (replay) - should use cached scrutinee value (1)
+      // even though nonDeterministicValue() would now return 2
+      val ctx2 = RunContext(workflowId, resumeFromIndex = 3)  // x, scrutinee, and result cached
+      WorkflowRunner.run(workflow, ctx2).map { result2 =>
+        assertEquals(result2, WorkflowResult.Completed(42))  // same result
+        assertEquals(scrutineeCallCount, 0)  // scrutinee NOT re-evaluated
+        assertEquals(case1Count, 0)  // case 1 NOT re-executed
+        assertEquals(case2Count, 0)  // case 2 NOT executed either
+      }
+    }
   }
