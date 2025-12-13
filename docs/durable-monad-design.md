@@ -8,7 +8,7 @@ This document describes the design of a replay-based durable execution monad for
 
 1. **Replay-based** - Portable across JVM/JS/Native
 2. **All vals cached** - Every `val` definition is automatically cached by execution index
-3. **Type-enforced** - `DurableCacheBackend[T, S]` typeclass required for all cached types (where `S` is the storage type)
+3. **Type-enforced** - `DurableStorage[T]` required for all cached types
 4. **Immutable** - No `var` allowed (`NoVars` marker), use recursion for iteration
 
 ## Execution Model
@@ -39,10 +39,10 @@ await/execute  // converts Durable[A] → A, caches result
 // Marker trait: no mutable variables allowed in async blocks
 trait CpsMonadNoVars[F[_]]
 
-// Serialization typeclass for cached values (S = storage type)
-trait DurableCacheBackend[T, S] {
-  def store(workflowId: WorkflowId, stepIndex: Int, valIndex: Int, value: T): Future[Unit]
-  def retrieve(workflowId: WorkflowId, stepIndex: Int, valIndex: Int): Future[Option[T]]
+// Storage backend for cached values
+trait DurableStorage[T] {
+  def store(workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit]
+  def retrieve(workflowId: WorkflowId, activityIndex: Int): Future[Option[T]]
 }
 
 // The monad itself
@@ -261,32 +261,28 @@ def myWorkflow(): Durable[Result] = async[Durable] {
 - Different version → start fresh or fail clearly
 - Deployment: separate containers per version
 
-### Q7: DurableCacheBackend Types
+### Q7: DurableStorage Types
 
-**Decision**: All vals require `DurableCacheBackend[T, S]` (where `S` is the storage type)
+**Decision**: All vals require `DurableStorage[T]`
 
 ```scala
 async[Durable] {
-  val a: Int = compute()           // needs DurableCacheBackend[Int, S] ✓
-  val b: String = fetch()          // needs DurableCacheBackend[String, S] ✓
-  val c: MyClass = create()        // needs DurableCacheBackend[MyClass, S] ✓
-  val d: Connection = open()       // DurableCacheBackend[Connection, S]? ✗ compile error
+  val a: Int = compute()           // needs DurableStorage[Int] ✓
+  val b: String = fetch()          // needs DurableStorage[String] ✓
+  val c: MyClass = create()        // needs DurableStorage[MyClass] ✓
+  val d: Connection = open()       // DurableStorage[Connection]? ✗ compile error
 }
 ```
 
-Standard instances provided:
+Storage instances are provided via a backing store:
 ```scala
-given [S]: DurableCacheBackend[Int, S]
-given [S]: DurableCacheBackend[String, S]
-given [S]: DurableCacheBackend[Boolean, S]
-given [A, S](using DurableCacheBackend[A, S]): DurableCacheBackend[List[A], S]
-given [A, S](using DurableCacheBackend[A, S]): DurableCacheBackend[Option[A], S]
-// etc.
-```
+// Universal given from backing store
+given backing: MemoryBackingStore = MemoryBackingStore()
+given [T]: DurableStorage[T] = backing.forType[T]
 
-Users derive for custom types:
-```scala
-case class MyData(x: Int, y: String) derives DurableCacheBackend
+// Production: backing store handles serialization internally
+given backing: PostgresBackingStore = PostgresBackingStore(conn)
+given [T: JsonCodec]: DurableStorage[T] = backing.forType[T]
 ```
 
 ### Q8: Nested Durable Values
@@ -378,17 +374,27 @@ On replay after restart:
 
 ### Design
 
-The cache backend is a typeclass parameterized by the cached type `T` and storage type `S`. It uses `Future` as the minimal async primitive from standard Scala (works on JVM/JS/Native).
+The cache backend is a trait parameterized by the cached type `T`. It encapsulates the storage implementation (memory, database, etc.) and uses `Future` as the minimal async primitive from standard Scala (works on JVM/JS/Native).
 
 ```scala
 import scala.concurrent.Future
 
 opaque type WorkflowId = String
 
-trait DurableCacheBackend[T, S] {
-  def store(storage: S, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit]
-  def retrieve(storage: S, workflowId: WorkflowId, activityIndex: Int): Future[Option[T]]
+trait DurableStorage[T] {
+  def store(workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit]
+  def retrieve(workflowId: WorkflowId, activityIndex: Int): Future[Option[T]]
 }
+```
+
+Storage instances are created from a backing store:
+```scala
+class MemoryBackingStore:
+  private val data = mutable.HashMap[(WorkflowId, Int), Any]()
+
+  def forType[T]: DurableStorage[T] = new DurableStorage[T]:
+    def store(wid, idx, value) = Future.successful(data.put((wid, idx), value))
+    def retrieve(wid, idx) = Future.successful(data.get((wid, idx)).asInstanceOf[Option[T]])
 ```
 
 ### Single Activity Index
@@ -424,36 +430,31 @@ workflow-123/
 - Deterministic during replay - same execution path = same indices
 - Resume uses `resumeFromIndex` to skip already-cached activities
 
-### Type-Safe Backend Capture (Decoupled Storage)
+### Activity Node Design
 
-The monad type is `Durable[A]` - the storage type `S` is NOT part of the monad type.
-Instead, `S` is existential in the Activity node, tying backend and storage together:
+Each Activity captures its own `DurableStorage[A]` and `RetryPolicy`:
 
 ```scala
-// Marker trait for storage types - allows macro to find storage in scope
-trait DurableStorage
-
-// Activity has existential S - hidden from Durable[A]
-case Activity[A, S](
+// Activity captures storage and retry policy
+case Activity[A](
   compute: () => Future[A],
-  backend: DurableCacheBackend[A, S],
-  storage: S  // S is existential - ties backend and storage together
-) extends Durable[A]  // Note: Durable[A], not Durable[A, S]
+  storage: DurableStorage[A],
+  retryPolicy: RetryPolicy
+) extends Durable[A]
 ```
 
 This ensures:
 - Type safety at activity creation (compile-time)
-- No type erasure problems at runtime (backend and storage have same S)
+- Storage encapsulates its backing store implementation
 - Storage type decoupled from the monad - user writes `Durable[A]`
-- Storage provided via AppContext pattern (`given MemoryStorage = ...`)
+- Storage provided via universal given pattern
 
 ### Runtime Interpreter (WorkflowRunner)
 
 The interpreter tracks activity index and handles replay.
-Note: `RunContext` no longer needs storage - each Activity carries its own:
+Each Activity carries its own `DurableStorage[A]`:
 
 ```scala
-// RunContext no longer has storage type parameter
 case class RunContext(
   workflowId: WorkflowId,
   resumeFromIndex: Int
@@ -472,63 +473,115 @@ object WorkflowRunner {
     def isReplayingAt(index: Int): Boolean = index < resumeFromIndex
   }
 
-  // No S type parameter - storage is in each Activity
   def run[A](workflow: Durable[A], ctx: RunContext)
             (using ec: ExecutionContext): Future[WorkflowResult[A]] = {
     val state = new InterpreterState(ctx.resumeFromIndex)
     step(workflow, ctx, state, Nil)
   }
 
-  // When handling Activity - backend and storage from the Activity node:
-  case Durable.Activity(compute, backend, storage) =>
+  // When handling Activity - storage from the Activity node:
+  case Durable.Activity(compute, storage) =>
     val index = state.nextIndex()
     if (state.isReplayingAt(index))
-      backend.retrieve(storage, ctx.workflowId, index)  // use cached
+      storage.retrieve(ctx.workflowId, index)  // use cached
     else
       compute().flatMap { result =>
-        backend.store(storage, ctx.workflowId, index, result)  // cache & continue
+        storage.store(ctx.workflowId, index, result)  // cache & continue
       }
 }
 ```
 
+### Activity Retry Mechanism
+
+Activities support automatic retries on recoverable failures with configurable policy:
+
+```scala
+case class RetryPolicy(
+  maxAttempts: Int = 3,
+  initialBackoff: FiniteDuration = 100.millis,
+  maxBackoff: FiniteDuration = 30.seconds,
+  backoffMultiplier: Double = 2.0,
+  jitterFactor: Double = 0.1,
+  isRecoverable: Throwable => Boolean = RetryPolicy.defaultIsRecoverable,
+  computeDelay: Option[(Int, FiniteDuration, FiniteDuration) => FiniteDuration] = None
+)
+```
+
+**Retry algorithm:**
+1. Execute activity's `compute()` function
+2. On failure, check `isRecoverable(exception)`
+3. If recoverable and attempts < maxAttempts: wait with exponential backoff, retry
+4. If not recoverable or max attempts reached: fail workflow
+5. On success: store result, continue workflow
+
+**Usage:**
+```scala
+// Default policy (3 attempts, exponential backoff)
+val workflow = Durable.activity { httpCall() }
+
+// Custom policy
+val workflow = Durable.activity(
+  httpCall(),
+  RetryPolicy(maxAttempts = 5, isRecoverable = { case _: TimeoutException => true; case _ => false })
+)
+
+// No retries
+val workflow = Durable.activity(httpCall(), RetryPolicy.noRetry)
+```
+
+**Logging:**
+```scala
+val config = RunConfig(
+  retryLogger = event => println(s"Retry ${event.attempt}/${event.maxAttempts}: ${event.error}"),
+  scheduler = Scheduler.default
+)
+val ctx = RunContext.fresh(WorkflowId("order-123"), config)
+```
+
+**Key design decisions:**
+- Retry state is transient (not stored in snapshot) - killed workflow resumes from last cached activity
+- Storage failures are not retried - they fail the workflow immediately
+- `defaultIsRecoverable` excludes `InterruptedException`, `VirtualMachineError`, `LinkageError`
+- Exceptions wrapped in `ExecutionException` are unwrapped before checking recoverability
+
 ### Compile-Time Check
 
-At each `val` definition, the macro checks that `DurableCacheBackend[T, S]` exists:
+At each `val` definition, the macro generates code that requires `DurableStorage[T]`:
 
 ```scala
 async[Durable] {
-  val x: Int = compute()       // summon[DurableCacheBackend[Int, S]] ✓
-  val y: MyClass = create()    // summon[DurableCacheBackend[MyClass, S]] ✓ or compile error
+  val x: Int = compute()       // needs DurableStorage[Int] ✓
+  val y: MyClass = create()    // needs DurableStorage[MyClass] ✓ or compile error
 }
 ```
 
 ### Storage Instances
 
-For test storage (MemoryStorage), a universal instance accepts any type:
+Storage instances are created from a backing store:
 
 ```scala
 // Test: universal given - stores values directly without serialization
-given [T]: DurableCacheBackend[T, MemoryStorage] = ...
+given backing: MemoryBackingStore = MemoryBackingStore()
+given [T]: DurableStorage[T] = backing.forType[T]
 
-// Production: requires serialization proof
-given [T: DurableSerializer]: DurableCacheBackend[T, PostgresDB] = ...
+// Production: backing store handles serialization
+given backing: PostgresBackingStore = PostgresBackingStore(conn)
+given [T: JsonCodec]: DurableStorage[T] = backing.forType[T]
 ```
 
 ### Dependencies
 
 ```scala
 // Future is the base async primitive (standard Scala)
-// DurableCacheBackend uses Future for async storage operations
-// WorkflowRunner interprets Durable monad and uses captured backends
+// DurableStorage uses Future for async storage operations
+// WorkflowRunner interprets Durable monad and uses captured storage
 // Durable monad is the user-facing API
 
-Future  ←──  DurableCacheBackend[T, S]  ←──  WorkflowRunner  ←──  Durable[A]
-(base)       (storage)                      (interpreter)        (user API)
+Future  ←──  DurableStorage[T]  ←──  WorkflowRunner  ←──  Durable[A]
+(base)       (storage)              (interpreter)        (user API)
 ```
 
 `A ← B` means "B depends on A" / "B uses A"
-
-Note: `Durable[A]` has no S in its type - storage is determined via `given DurableStorage` in scope.
 
 ## dotty-cps-async Integration
 
@@ -536,7 +589,7 @@ Note: `Durable[A]` has no S in its type - storage is determined via `given Durab
 ### Durable Implementation
 
 ```scala
-// Preprocessor for Durable - no S type parameter
+// Preprocessor for Durable
 given durablePreprocessor[C <: Durable.DurableCpsContext]: CpsPreprocessor[Durable, C] with
   transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
     ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
@@ -546,18 +599,15 @@ object DurablePreprocessor {
     body: Expr[A],
     ctx: Expr[C]
   )(using Quotes): Expr[A] = {
-    // 1. Find storage type S by searching for DurableStorage given in scope
-    val storageType = Implicits.search(TypeRepr.of[DurableStorage]) match
-      case success => success.tree.tpe.widen
-      case failure => report.errorAndAbort("No DurableStorage found")
-
-    // 2. Walk AST and transform (top-level only):
+    // Walk AST and transform (top-level only):
     //
     // Val definitions:
-    //    val x = rhs  →  val x = await($ctx.activitySync[A, S] { rhs })
+    //    val x = rhs  →  val x = await($ctx.activitySync[A] { rhs })
     //
     // Control flow (auto-cache conditions):
-    //    if (cond) { ... }  →  if (await($ctx.activitySync[Boolean, S] { cond })) { ... }
+    //    if (cond) { ... }  →  if (await($ctx.activitySync[Boolean] { cond })) { ... }
+    //
+    // DurableStorage[A] is resolved via normal given resolution
     //
     // SKIP (do not transform inside):
     // - Lambda bodies: x => ...
@@ -569,7 +619,8 @@ object DurablePreprocessor {
 // Example transformation:
 //
 // Source:
-//   given MemoryStorage = MemoryStorage()
+//   given backing: MemoryBackingStore = MemoryBackingStore()
+//   given [T]: DurableStorage[T] = backing.forType[T]
 //   async[Durable] {
 //     val a = compute()
 //     val b = list.map(x => process(x))  // lambda untouched
@@ -579,10 +630,95 @@ object DurablePreprocessor {
 //
 // After preprocessing:
 //   async[Durable] {
-//     val a = await(ctx.activitySync[Int, MemoryStorage] { compute() })
-//     val b = await(ctx.activitySync[List[X], MemoryStorage] { list.map(...) })
+//     val a = await(ctx.activitySync[Int] { compute() })
+//     val b = await(ctx.activitySync[List[X]] { list.map(...) })
 //     val c = await(op)
-//     val d = await(ctx.activitySync[Y, MemoryStorage] { transform(c) })
+//     val d = await(ctx.activitySync[Y] { transform(c) })
 //   }
+```
+
+## DurableFunction - Serializable Workflow Definitions
+
+To restore workflows from storage after process restart, we need a way to recreate the `Durable[R]` computation. Since lambdas can't be serialized, we use `DurableFunction` - objects with a known type name that can be looked up by name.
+
+### Trait Hierarchy
+
+```scala
+sealed trait DurableFunction:
+  def functionName: String
+
+trait DurableFunction0[R: DurableStorage] extends DurableFunction:
+  def apply(): Durable[R]
+
+trait DurableFunction1[T1: DurableStorage, R: DurableStorage] extends DurableFunction:
+  def apply(t1: T1): Durable[R]
+
+trait DurableFunction2[T1: DurableStorage, T2: DurableStorage, R: DurableStorage] extends DurableFunction:
+  def apply(t1: T1, t2: T2): Durable[R]
+
+trait DurableFunction3[T1: DurableStorage, T2: DurableStorage, T3: DurableStorage, R: DurableStorage] extends DurableFunction:
+  def apply(t1: T1, t2: T2, t3: T3): Durable[R]
+```
+
+### DurableFunctionName Typeclass
+
+Provides fully qualified name via compile-time macro:
+
+```scala
+trait DurableFunctionName[F <: DurableFunction]:
+  def name: String
+
+object DurableFunctionName:
+  // Macro derives full class name at compile time
+  inline def derived[F <: DurableFunction]: DurableFunctionName[F] = ...
+
+  // Get name and register in one call
+  inline def ofAndRegister[F <: DurableFunction](f: F)(using fn: DurableFunctionName[F]): String
+```
+
+### Auto-Registration Pattern
+
+When the object initializes, it registers itself in the global registry:
+
+```scala
+object PaymentWorkflow extends DurableFunction1[String, Payment] derives DurableFunctionName:
+  override val functionName = DurableFunctionName.ofAndRegister(this)
+
+  override def apply(orderId: String): Durable[Payment] =
+    for
+      order <- Durable.activity { fetchOrder(orderId) }
+      payment <- Durable.activity { processPayment(order) }
+    yield payment
+```
+
+### Registry
+
+Platform-specific implementations provide thread-safety where needed:
+- JVM: `ConcurrentHashMap`
+- JS: Simple `mutable.Map` (single-threaded)
+- Native: `TrieMap` (pure Scala, thread-safe)
+
+```scala
+trait DurableFunctionRegistry:
+  def registerByName(name: String, f: DurableFunction): Unit
+  def lookup(name: String): Option[DurableFunction]
+
+object DurableFunctionRegistry:
+  val global: DurableFunctionRegistry = createRegistry()
+```
+
+### Workflow Engine Integration (Future)
+
+```scala
+// Start workflow
+val workflowId = engine.start(PaymentWorkflow, "order-123")
+// Engine stores: workflowId -> ("durable.PaymentWorkflow", serialized("order-123"))
+
+// On restore (after process restart):
+// 1. Load ("durable.PaymentWorkflow", serialized args) from storage
+// 2. Lookup "durable.PaymentWorkflow" in registry -> PaymentWorkflow object
+// 3. Deserialize args -> "order-123"
+// 4. Call PaymentWorkflow.apply("order-123") to get Durable[Payment]
+// 5. Resume with cached activity results
 ```
 

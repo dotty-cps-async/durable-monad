@@ -91,7 +91,7 @@ class DurableBasicTest extends FunSuite:
     val durable = Durable.suspend(condition)
 
     durable match
-      case Durable.Suspend(WaitCondition.Event("test-event")) => () // ok
+      case Durable.Suspend(WaitCondition.Event("test-event"), _) => () // ok - now has storage
       case _ => fail("Expected Suspend with Event condition")
   }
 
@@ -109,7 +109,7 @@ class DurableBasicTest extends FunSuite:
     val durable = for
       a <- Durable.activity[Int](Future.successful(10))
       b <- Durable.activity[Int](Future.successful(20))
-      _ <- Durable.suspend(WaitCondition.Event[Unit]("wait"))
+      _ <- Durable.suspend(WaitCondition.Event[String]("wait"))
       c <- Durable.activity[Int](Future.successful(12))
     yield a + b + c
 

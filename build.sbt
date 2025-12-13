@@ -7,6 +7,7 @@ lazy val catsEffectVersion = "3.5.7"
 lazy val cpsAsyncVersion = "1.2.0-SNAPSHOT"
 lazy val cpsAsyncOrg = "io.github.dotty-cps-async"
 lazy val appContextVersion = "0.3.0"
+lazy val jsoniterVersion = "2.30.15"
 
 // Cross-platform core (Durable monad, DurableCacheBackend, etc.)
 lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
@@ -22,7 +23,11 @@ lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   )
   .jvmSettings(
     // JVM-specific settings
-    Test / fork := true
+    Test / fork := true,
+    libraryDependencies ++= Seq(
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % jsoniterVersion % Test,
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % jsoniterVersion % Test
+    )
   )
   .jsSettings(
     // JS-specific settings

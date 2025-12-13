@@ -103,11 +103,8 @@ object WorkflowRunner:
       case activity: Durable.Activity[b] =>
         handleActivity[A, b](activity, ctx, state, stack)
 
-      case Durable.Suspend(condition) =>
-        Future.successful(WorkflowResult.Suspended(
-          DurableSnapshot(ctx.workflowId, state.currentIndex),
-          condition
-        ))
+      case suspend: Durable.Suspend[a] =>
+        handleSuspend[A, a](suspend, ctx, state, stack)
 
   /**
    * Continue with a result (success or failure), applying the next continuation from the stack.
@@ -228,6 +225,48 @@ object WorkflowRunner:
         // Storage operation itself failed
         continueWith(Failure(e), ctx, state, stack)
       }
+
+  /**
+   * Handle Suspend - assign index, check cache for replay, otherwise suspend.
+   * Uses the DurableStorage captured in the Suspend node.
+   *
+   * On replay (index < resumeFromIndex), the event value should be cached.
+   * On fresh run, we suspend and return the snapshot for later resumption.
+   */
+  private def handleSuspend[A, B](
+    suspend: Durable.Suspend[B],
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
+    val storage = suspend.storage
+    val condition = suspend.condition
+    // Assign index at runtime (like Activity)
+    val index = state.nextIndex()
+
+    if state.isReplayingAt(index) then
+      // Replaying - retrieve event value from cache
+      storage.retrieve(ctx.workflowId, index).flatMap {
+        case Some(Right(cached)) =>
+          // Cached event value - continue with it
+          continueWith(Success(cached), ctx, state, stack)
+        case Some(Left(storedFailure)) =>
+          // Cached failure - replay as ReplayedException
+          continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
+        case None =>
+          continueWith(Failure(
+            RuntimeException(s"Missing cached event value for suspend at index=$index during replay")
+          ), ctx, state, stack)
+      }.recoverWith { case e =>
+        continueWith(Failure(e), ctx, state, stack)
+      }
+    else
+      // Fresh run - suspend and return snapshot
+      // The event value will be stored externally when the event occurs
+      Future.successful(WorkflowResult.Suspended(
+        DurableSnapshot(ctx.workflowId, index),
+        condition
+      ))
 
   /**
    * Execute activity computation with retry logic.

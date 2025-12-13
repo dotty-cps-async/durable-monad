@@ -59,8 +59,11 @@ enum Durable[A]:
     retryPolicy: RetryPolicy
   ) extends Durable[A]
 
-  /** Suspend for external input - timer, event, child workflow, etc. */
-  case Suspend[A](condition: WaitCondition[A]) extends Durable[A]
+  /**
+   * Suspend for external input - timer, event, child workflow, etc.
+   * Storage is captured for replay - when resumed, the event value is read from cache.
+   */
+  case Suspend[A](condition: WaitCondition[A], storage: DurableStorage[A]) extends Durable[A]
 
   /** Try/catch semantics - handles both success and failure of fa */
   case FlatMapTry[A, B](fa: Durable[A], f: Try[A] => Durable[B]) extends Durable[B]
@@ -106,20 +109,20 @@ object Durable:
     Activity(() => Future.successful(compute), storage, policy)
 
   /** Suspend the workflow with a wait condition */
-  def suspend[A](condition: WaitCondition[A]): Durable[A] =
-    Suspend(condition)
+  def suspend[A](condition: WaitCondition[A])(using storage: DurableStorage[A]): Durable[A] =
+    Suspend(condition, storage)
 
   /** Sleep until a specific instant, returns actual wake time */
-  def sleepUntil(wakeAt: Instant): Durable[Instant] =
-    Suspend(WaitCondition.Timer(wakeAt))
+  def sleepUntil(wakeAt: Instant)(using storage: DurableStorage[Instant]): Durable[Instant] =
+    Suspend(WaitCondition.Timer(wakeAt), storage)
 
   /** Sleep for a duration, returns actual wake time */
-  def sleep(duration: FiniteDuration): Durable[Instant] =
+  def sleep(duration: FiniteDuration)(using storage: DurableStorage[Instant]): Durable[Instant] =
     sleepUntil(Instant.now().plusMillis(duration.toMillis))
 
   /** Wait for a broadcast event of type E */
   def awaitEvent[E](using eventName: DurableEventName[E], storage: DurableStorage[E]): Durable[E] =
-    Suspend(WaitCondition.Event(eventName.name))
+    Suspend(WaitCondition.Event(eventName.name), storage)
 
   /**
    * CpsMonadContext for Durable - provides context for async/await.

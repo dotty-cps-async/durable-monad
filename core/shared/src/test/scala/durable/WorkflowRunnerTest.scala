@@ -116,22 +116,23 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run suspend") {
-    withStorage {
-      val ctx = RunContext.fresh(WorkflowId("test-7"))
+    val backing = MemoryBackingStore()
+    given MemoryBackingStore = backing
+    given [T]: DurableStorage[T] = backing.forType[T]
+    val ctx = RunContext.fresh(WorkflowId("test-7"))
 
-      val workflow = for
-        a <- Durable.pure[Int](10)
-        _ <- Durable.suspend(WaitCondition.Event[Unit]("waiting for signal"))
-        b <- Durable.pure[Int](32)
-      yield a + b
+    val workflow = for
+      a <- Durable.pure[Int](10)
+      _ <- Durable.suspend(WaitCondition.Event[String]("waiting for signal"))
+      b <- Durable.pure[Int](32)
+    yield a + b
 
-      WorkflowRunner.run(workflow, ctx).map { result =>
-        assert(result.isInstanceOf[WorkflowResult.Suspended[?]])
-        val suspended = result.asInstanceOf[WorkflowResult.Suspended[Int]]
-        suspended.condition match
-          case WaitCondition.Event(name) => assertEquals(name, "waiting for signal")
-          case _ => fail("Expected Event condition")
-      }
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowResult.Suspended[?]])
+      val suspended = result.asInstanceOf[WorkflowResult.Suspended[Int]]
+      suspended.condition match
+        case WaitCondition.Event(name) => assertEquals(name, "waiting for signal")
+        case _ => fail("Expected Event condition")
     }
   }
 
