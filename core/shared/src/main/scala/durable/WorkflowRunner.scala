@@ -100,11 +100,15 @@ object WorkflowRunner:
       case Durable.LocalComputation(compute) =>
         handleLocalComputation(compute.asInstanceOf[RunContext => Any], ctx, state, stack)
 
-      case activity: Durable.Activity[b] =>
-        handleActivity[A, b](activity, ctx, state, stack)
+      case activity: Durable.Activity[b, s] =>
+        handleActivity[A, b, s](activity, ctx, state, stack)
 
-      case suspend: Durable.Suspend[a] =>
-        handleSuspend[A, a](suspend, ctx, state, stack)
+      case suspend: Durable.Suspend[a, s] =>
+        handleSuspend[A, a, s](suspend, ctx, state, stack)
+
+      case Durable.ContinueAs(metadata, storeArgs, workflow, backend) =>
+        // ContinueAs is a terminal operation - return result for engine to handle
+        Future.successful(WorkflowResult.ContinueAs(metadata, storeArgs, workflow, backend))
 
   /**
    * Continue with a result (success or failure), applying the next continuation from the stack.
@@ -176,12 +180,13 @@ object WorkflowRunner:
    * Handle Activity - assign index, check cache, execute if needed with retry, cache result.
    * Uses the DurableStorage and RetryPolicy captured in the Activity node.
    * Type parameter B is the activity's result type, A is the final workflow result type.
+   * Type parameter S is the storage backend type.
    *
    * Both successes and failures are cached for deterministic replay.
    * On replay, failures are returned as ReplayedException.
    */
-  private def handleActivity[A, B](
-    activity: Durable.Activity[B],
+  private def handleActivity[A, B, S <: DurableStorageBackend](
+    activity: Durable.Activity[B, S],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
@@ -229,12 +234,13 @@ object WorkflowRunner:
   /**
    * Handle Suspend - assign index, check cache for replay, otherwise suspend.
    * Uses the DurableStorage captured in the Suspend node.
+   * Type parameter S is the storage backend type.
    *
    * On replay (index < resumeFromIndex), the event value should be cached.
    * On fresh run, we suspend and return the snapshot for later resumption.
    */
-  private def handleSuspend[A, B](
-    suspend: Durable.Suspend[B],
+  private def handleSuspend[A, B, S <: DurableStorageBackend](
+    suspend: Durable.Suspend[B, S],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]

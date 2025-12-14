@@ -1,31 +1,44 @@
 package durable
 
 /**
- * Base trait for serializable workflow definitions.
+ * Unified trait for serializable workflow definitions.
  *
  * DurableFunction enables workflow definitions to be stored and restored:
  * - Function identified by name (derived via DurableFunctionName)
- * - Arguments serialized via DurableStorage
+ * - Arguments serialized via TupleDurableStorage
  * - On restore: lookup function by name, deserialize args, recreate Durable[R]
  *
  * Implementations must be objects (not classes) for reliable lookup by name.
  * Use `derives DurableFunctionName` and override `functionName` to enable auto-registration.
  *
+ * @tparam Args tuple of argument types (EmptyTuple for no args, Tuple1[T] for one arg, etc.)
+ * @tparam R result type (must have DurableStorage for caching)
+ *
  * Example:
  * {{{
- * object PaymentWorkflow extends DurableFunction1[String, Payment] derives DurableFunctionName:
- *   override val functionName = DurableFunctionName.of[PaymentWorkflow.type]
+ * object PaymentWorkflow extends DurableFunction[Tuple1[String], Payment] derives DurableFunctionName:
+ *   override val functionName = DurableFunctionName.ofAndRegister(this)
  *
- *   override def apply(orderId: String): Durable[Payment] =
+ *   override def apply[S <: DurableStorageBackend](args: Tuple1[String])(using
+ *     S, TupleDurableStorage[Tuple1[String], S], DurableStorage[Payment, S]
+ *   ): Durable[Payment] =
+ *     val Tuple1(orderId) = args
  *     for
  *       order <- Durable.activity { fetchOrder(orderId) }
  *       payment <- Durable.activity { processPayment(order) }
  *     yield payment
  * }}}
  */
-sealed trait DurableFunction:
+trait DurableFunction[Args <: Tuple, R]:
   /** Unique name for this function, used for serialization and registry lookup */
   def functionName: String
+
+  /** Apply the function to arguments */
+  def apply[S <: DurableStorageBackend](args: Args)(using
+    backend: S,
+    argsStorage: TupleDurableStorage[Args, S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R]
 
   /**
    * Force registration of this function. Call this after functionName is initialized.
@@ -36,40 +49,8 @@ sealed trait DurableFunction:
     true
   }
 
-/**
- * Workflow with no arguments.
- *
- * @tparam R result type (must have DurableStorage for caching)
- */
-trait DurableFunction0[R] extends DurableFunction:
-  def apply()(using storageR: DurableStorage[R]): Durable[R]
-
-/**
- * Workflow with one argument.
- *
- * @tparam T1 first argument type (must have DurableStorage for serialization)
- * @tparam R result type (must have DurableStorage for caching)
- */
-trait DurableFunction1[T1, R] extends DurableFunction:
-  def apply(t1: T1)(using storageT1: DurableStorage[T1], storageR: DurableStorage[R]): Durable[R]
-
-/**
- * Workflow with two arguments.
- *
- * @tparam T1 first argument type (must have DurableStorage for serialization)
- * @tparam T2 second argument type (must have DurableStorage for serialization)
- * @tparam R result type (must have DurableStorage for caching)
- */
-trait DurableFunction2[T1, T2, R] extends DurableFunction:
-  def apply(t1: T1, t2: T2)(using storageT1: DurableStorage[T1], storageT2: DurableStorage[T2], storageR: DurableStorage[R]): Durable[R]
-
-/**
- * Workflow with three arguments.
- *
- * @tparam T1 first argument type (must have DurableStorage for serialization)
- * @tparam T2 second argument type (must have DurableStorage for serialization)
- * @tparam T3 third argument type (must have DurableStorage for serialization)
- * @tparam R result type (must have DurableStorage for caching)
- */
-trait DurableFunction3[T1, T2, T3, R] extends DurableFunction:
-  def apply(t1: T1, t2: T2, t3: T3)(using storageT1: DurableStorage[T1], storageT2: DurableStorage[T2], storageT3: DurableStorage[T3], storageR: DurableStorage[R]): Durable[R]
+/** Type aliases for common arities (for convenience) */
+type DurableFunction0[R] = DurableFunction[EmptyTuple, R]
+type DurableFunction1[T1, R] = DurableFunction[Tuple1[T1], R]
+type DurableFunction2[T1, T2, R] = DurableFunction[(T1, T2), R]
+type DurableFunction3[T1, T2, T3, R] = DurableFunction[(T1, T2, T3), R]

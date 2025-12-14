@@ -17,7 +17,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("async block with single val") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-1"))
 
     var computeCount = 0
@@ -39,7 +39,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("async block with multiple vals") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-2"))
 
     var computeCount = 0
@@ -60,7 +60,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("async block replays from cache") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val workflowId = WorkflowId("preprocess-3")
 
     // First run - compute and cache
@@ -89,7 +89,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("async block with if expression") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-4"))
 
     var condCount = 0
@@ -118,7 +118,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("async block with nested block") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-5"))
 
     var outerCount = 0
@@ -144,7 +144,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("async block with match expression") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val ctx = RunContext.fresh(WorkflowId("preprocess-6"))
 
     var scrutineeCount = 0
@@ -170,7 +170,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("preprocessor captures DurableStorage in Activity") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     // Create a workflow via async - the preprocessor should capture DurableStorage
     val workflow = async[Durable] {
@@ -182,14 +182,14 @@ class DurablePreprocessorTest extends FunSuite:
     workflow match
       case Durable.FlatMap(Durable.Activity(_, capturedStorage, _), _) =>
         // The captured storage should be a DurableStorage instance
-        assert(capturedStorage.isInstanceOf[DurableStorage[?]],
+        assert(capturedStorage.isInstanceOf[DurableStorage[?, ?]],
           s"Expected DurableStorage but got ${capturedStorage.getClass.getName}")
       case other =>
         fail(s"Expected FlatMap(Activity(...), ...) but got ${other.getClass.getSimpleName}")
   }
 
-  test("preprocessor gives clear error when no DurableStorage in scope") {
-    // This test verifies that when no DurableStorage is in scope,
+  test("preprocessor gives clear error when no DurableStorageBackend in scope") {
+    // This test verifies that when no DurableStorageBackend is in scope,
     // the preprocessor gives a clear compile error.
     // We use scala.compiletime.testing.typeCheckErrors to check for the expected error.
     import scala.compiletime.testing.typeCheckErrors
@@ -199,23 +199,23 @@ class DurablePreprocessorTest extends FunSuite:
       import durable.DurableCpsPreprocessor.given
       import cps.*
 
-      // Note: NO given DurableStorage here!
+      // Note: NO given DurableStorageBackend here!
       val workflow = async[Durable] {
         val x = 42
         x
       }
     """)
 
-    assert(errors.nonEmpty, "Expected a compile error when no DurableStorage is in scope")
-    // The error message should mention DurableStorage[Int] since x = 42 is an Int
-    assert(errors.exists(_.message.contains("DurableStorage[Int]")),
-      s"Expected error about missing DurableStorage[Int], but got: ${errors.map(_.message).mkString(", ")}")
+    assert(errors.nonEmpty, "Expected a compile error when no DurableStorageBackend is in scope")
+    // The error message should mention DurableStorageBackend since that's what the preprocessor looks for first
+    assert(errors.exists(_.message.contains("DurableStorageBackend")),
+      s"Expected error about missing DurableStorageBackend, but got: ${errors.map(_.message).mkString(", ")}")
   }
 
   test("non-deterministic condition in if is cached and replayed") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val workflowId = WorkflowId("preprocess-nondet")
 
     // Simulate non-deterministic condition with a counter
@@ -268,7 +268,7 @@ class DurablePreprocessorTest extends FunSuite:
   test("non-deterministic scrutinee in match is cached and replayed") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
     val workflowId = WorkflowId("preprocess-match-nondet")
 
     // Simulate non-deterministic scrutinee with a counter

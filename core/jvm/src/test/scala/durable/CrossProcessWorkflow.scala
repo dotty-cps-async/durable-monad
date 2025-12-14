@@ -12,11 +12,15 @@ import java.nio.file.{Files, Path, Paths}
  * Test workflow for cross-process persistence testing.
  * Does an activity, then suspends waiting for an event.
  */
-object CrossProcessWorkflow extends DurableFunction1[String, String] derives DurableFunctionName:
+object CrossProcessWorkflow extends DurableFunction[Tuple1[String], String] derives DurableFunctionName:
   override val functionName = DurableFunctionName.ofAndRegister(this)
 
-  override def apply(input: String)(using storageT1: DurableStorage[String], storageR: DurableStorage[String]): Durable[String] =
-    given DurableStorage[String] = storageR  // re-export for Durable.activity
+  override def apply[S <: DurableStorageBackend](args: Tuple1[String])(using
+    backend: S,
+    argsStorage: TupleDurableStorage[Tuple1[String], S],
+    resultStorage: DurableStorage[String, S]
+  ): Durable[String] =
+    val Tuple1(input) = args
     for
       // First activity - will be cached
       step1 <- Durable.activity {
@@ -44,7 +48,8 @@ object ProcessA:
     val input = args(2)
 
     val storage = JsonFileStorage(storageDir)
-    given [T: JsonValueCodec]: DurableStorage[T] = storage.forType[T]
+    given JsonFileStorage = storage
+    given [T: JsonValueCodec]: DurableStorage[T, JsonFileStorage] = storage.forType[T]
 
     // Force workflow registration by accessing it
     val _ = CrossProcessWorkflow.functionName
@@ -52,7 +57,7 @@ object ProcessA:
     println(s"[ProcessA] Starting workflow $workflowId with input: $input")
 
     // Create and run workflow
-    val workflow = CrossProcessWorkflow.apply(input)
+    val workflow = CrossProcessWorkflow.apply(Tuple1(input))
     val ctx = RunContext.fresh(workflowId)
 
     val result = Await.result(WorkflowRunner.run(workflow, ctx), 30.seconds)
@@ -63,12 +68,12 @@ object ProcessA:
         println(s"[ProcessA] Waiting for: $condition")
 
         // Save metadata for Process B
-        storage.storeMetadata(workflowId, WorkflowMetadata(
+        storage.storeMetadata(workflowId, JsonWorkflowMetadata(
           functionName = CrossProcessWorkflow.functionName,
           argTypes = List("java.lang.String"),
-          argsJson = writeToString(input),
+          argsJson = writeToString(input)(using JsonFileStorage.given_JsonValueCodec_String),
           activityIndex = snapshot.activityIndex,
-          status = WorkflowStatus.Suspended
+          status = JsonWorkflowStatus.Suspended
         ))
 
         println(s"[ProcessA] Metadata saved. Exiting.")
@@ -79,6 +84,10 @@ object ProcessA:
 
       case WorkflowResult.Failed(error) =>
         println(s"[ProcessA] Workflow failed: ${error.getMessage}")
+        sys.exit(1)
+
+      case WorkflowResult.ContinueAs(_, _, _, _) =>
+        println(s"[ProcessA] Workflow requested continueAs unexpectedly")
         sys.exit(1)
 
 /**
@@ -95,7 +104,8 @@ object ProcessB:
     val eventValue = args(2)
 
     val storage = JsonFileStorage(storageDir)
-    given [T: JsonValueCodec]: DurableStorage[T] = storage.forType[T]
+    given JsonFileStorage = storage
+    given [T: JsonValueCodec]: DurableStorage[T, JsonFileStorage] = storage.forType[T]
 
     // Force workflow registration by accessing it
     val _ = CrossProcessWorkflow.functionName
@@ -122,14 +132,14 @@ object ProcessB:
     println(s"[ProcessB] Found function in registry: ${function.functionName}")
 
     // Deserialize args and recreate workflow
-    val input = readFromString[String](metadata.argsJson)
-    val workflow = function.asInstanceOf[DurableFunction1[String, String]].apply(input)
+    val input = readFromString[String](metadata.argsJson)(using JsonFileStorage.given_JsonValueCodec_String)
+    val workflow = function.asInstanceOf[DurableFunction[Tuple1[String], String]].apply(Tuple1(input))
 
     // Store the event value at the suspend point index
     // This simulates the event being delivered
     println(s"[ProcessB] Storing event value '$eventValue' at index ${metadata.activityIndex}")
     Await.result(
-      summon[DurableStorage[String]].store(workflowId, metadata.activityIndex, eventValue),
+      storage.forType[String].store(workflowId, metadata.activityIndex, eventValue),
       5.seconds
     )
 
@@ -146,7 +156,7 @@ object ProcessB:
 
         // Update metadata
         storage.storeMetadata(workflowId, metadata.copy(
-          status = WorkflowStatus.Completed
+          status = JsonWorkflowStatus.Completed
         ))
 
       case WorkflowResult.Suspended(snapshot, condition) =>
@@ -156,4 +166,8 @@ object ProcessB:
       case WorkflowResult.Failed(error) =>
         println(s"[ProcessB] Workflow failed: ${error.getMessage}")
         error.printStackTrace()
+        sys.exit(1)
+
+      case WorkflowResult.ContinueAs(_, _, _, _) =>
+        println(s"[ProcessB] Workflow requested continueAs unexpectedly")
         sys.exit(1)

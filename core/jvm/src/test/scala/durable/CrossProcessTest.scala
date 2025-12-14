@@ -46,7 +46,7 @@ class CrossProcessTest extends FunSuite:
       val storage = JsonFileStorage(tempDir)
       val metadataAfterA = storage.loadMetadata(WorkflowId(workflowId))
       assert(metadataAfterA.isDefined, "Metadata should exist after Process A")
-      assertEquals(metadataAfterA.get.status, WorkflowStatus.Suspended)
+      assertEquals(metadataAfterA.get.status, JsonWorkflowStatus.Suspended)
       assertEquals(metadataAfterA.get.functionName, "durable.CrossProcessWorkflow")
 
       // Verify activity was cached
@@ -77,7 +77,7 @@ class CrossProcessTest extends FunSuite:
       // Verify Process B completed the workflow
       val metadataAfterB = storage.loadMetadata(WorkflowId(workflowId))
       assert(metadataAfterB.isDefined, "Metadata should exist after Process B")
-      assertEquals(metadataAfterB.get.status, WorkflowStatus.Completed)
+      assertEquals(metadataAfterB.get.status, JsonWorkflowStatus.Completed)
 
       // Verify second activity was cached
       val activity2File = tempDir.resolve(workflowId).resolve("activity-2.json")
@@ -108,14 +108,15 @@ class CrossProcessTest extends FunSuite:
     // Provide storage for workflow creation
     val tempDir = Files.createTempDirectory("durable-registry-test-")
     val storage = JsonFileStorage(tempDir)
-    given DurableStorage[String] = storage.forType[String]
+    given JsonFileStorage = storage
+    given [T: com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec]: DurableStorage[T, JsonFileStorage] = storage.forType[T]
 
     try
       // Verify we can cast and call it
-      val function = lookup.get.asInstanceOf[DurableFunction1[String, String]]
-      val workflow = function.apply("test")
+      val function = lookup.get.asInstanceOf[DurableFunction[Tuple1[String], String]]
+      val workflow = function.apply(Tuple1("test"))
       assert(workflow.isInstanceOf[Durable[String]], "Should return Durable[String]")
     finally
       // Cleanup
-      storage.clear()
+      storage.clearAll()
   }

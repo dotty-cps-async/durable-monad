@@ -21,7 +21,7 @@ class TryCatchTest extends FunSuite:
   test("try/catch catches error from activity") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val workflow = async[Durable] {
       try {
@@ -40,11 +40,11 @@ class TryCatchTest extends FunSuite:
   test("try/catch catches error from failing activity computation") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val workflow = async[Durable] {
       try {
-        await(Durable.activity[Int](Future.failed(RuntimeException("activity failed")), RetryPolicy.noRetry))
+        await(Durable.activity(Future.failed(RuntimeException("activity failed")), RetryPolicy.noRetry))
       } catch {
         case e: RuntimeException => -1
       }
@@ -59,7 +59,7 @@ class TryCatchTest extends FunSuite:
   test("try/catch passes through success") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val workflow = async[Durable] {
       try {
@@ -78,7 +78,7 @@ class TryCatchTest extends FunSuite:
   test("uncaught error propagates to workflow failure") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     // IOException is NOT a RuntimeException, so it won't be caught
     val workflow = async[Durable] {
@@ -103,7 +103,7 @@ class TryCatchTest extends FunSuite:
   test("nested try/catch - inner catches") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val workflow = async[Durable] {
       try {
@@ -126,7 +126,7 @@ class TryCatchTest extends FunSuite:
   test("nested try/catch - outer catches when inner doesn't match") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     // IOException is NOT a RuntimeException, so inner catch won't match
     val workflow = async[Durable] {
@@ -150,7 +150,7 @@ class TryCatchTest extends FunSuite:
   test("error in catch handler propagates") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val workflow = async[Durable] {
       try {
@@ -175,7 +175,7 @@ class TryCatchTest extends FunSuite:
   test("try/catch with activity - success is cached") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     var callCount = 0
     val workflow = async[Durable] {
@@ -207,7 +207,7 @@ class TryCatchTest extends FunSuite:
   test("error from local computation is caught") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val workflow = async[Durable] {
       try {
@@ -226,7 +226,7 @@ class TryCatchTest extends FunSuite:
   test("FlatMapTry structure is created correctly") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val inner = Durable.pure(42)
     val handler: Try[Int] => Durable[Int] = {
@@ -245,7 +245,7 @@ class TryCatchTest extends FunSuite:
   test("FlatMapTry handles failure correctly") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     val inner = Durable.failed[Int](RuntimeException("test error"))
     val handler: Try[Int] => Durable[Int] = {

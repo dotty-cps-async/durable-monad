@@ -20,9 +20,9 @@ class FailureReplayTest extends FunSuite:
   test("failure is stored in cache") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
-    val workflow = Durable.activity[Int](
+    val workflow = Durable.activity(
       Future.failed(RuntimeException("test error")),
       RetryPolicy.noRetry
     )
@@ -51,13 +51,13 @@ class FailureReplayTest extends FunSuite:
   test("replayed failure becomes ReplayedException") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     // Pre-populate cache with a failure
     val storedFailure = StoredFailure("java.lang.RuntimeException", "replayed error")
     backing.put(WorkflowId("failure-replay-1"), 0, Left(storedFailure))
 
-    val workflow = Durable.activity[Int](
+    val workflow = Durable.activity(
       Future.successful(999), // Won't be executed
       RetryPolicy.noRetry
     )
@@ -109,7 +109,7 @@ class FailureReplayTest extends FunSuite:
   test("failure replay with manual catch handling") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     // Pre-populate cache with a failure
     val storedFailure = StoredFailure("java.lang.RuntimeException", "handled error")
@@ -117,7 +117,7 @@ class FailureReplayTest extends FunSuite:
 
     // Create workflow with FlatMapTry to catch the error
     // This simulates what the preprocessor would generate
-    val inner = Durable.activity[Int](Future.successful(999), RetryPolicy.noRetry)
+    val inner = Durable.activity(Future.successful(999), RetryPolicy.noRetry)
     val workflow = Durable.FlatMapTry[Int, Int](inner, {
       case Success(v) => Durable.pure(v)
       case Failure(e: RuntimeException) => Durable.pure(-1)
@@ -152,7 +152,7 @@ class FailureReplayTest extends FunSuite:
   test("preprocessor transforms catch to handle ReplayedException") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     var shouldFail = true
     val workflow = async[Durable] {
@@ -183,7 +183,7 @@ class FailureReplayTest extends FunSuite:
   test("catch handler using exception is cached and replayed correctly") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     var shouldFail = true
     var capturedMessage: String = ""
@@ -227,7 +227,7 @@ class FailureReplayTest extends FunSuite:
   test("failure and success in sequence - failure is replayed correctly") {
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
-    given [T]: DurableStorage[T] = backing.forType[T]
+    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
     // Pre-populate: index 0 = success, index 1 = failure
     backing.put(WorkflowId("seq-1"), 0, Right(10))
@@ -235,8 +235,8 @@ class FailureReplayTest extends FunSuite:
 
     // Workflow that does two activities
     val workflow = for
-      a <- Durable.activity[Int](Future.successful(10))
-      b <- Durable.activity[Int](Future.successful(20))
+      a <- Durable.activity(Future.successful(10))
+      b <- Durable.activity(Future.successful(20))
     yield a + b
 
     // Replay from index 2 (both should be replayed)

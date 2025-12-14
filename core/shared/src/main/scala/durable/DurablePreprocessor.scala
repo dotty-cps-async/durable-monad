@@ -17,7 +17,9 @@ import cps.*
  *   - DOES NOT transform inside lambdas (x => ...) - treated as atomic
  *   - DOES NOT transform inside nested defs - treated as atomic
  *
- * DurableStorage[A] is resolved via normal given resolution at each activity site.
+ * First resolves DurableStorageBackend from scope to get the backend type S,
+ * then resolves DurableStorage[A, S] for each activity. This ensures all
+ * activities in a workflow share the same backend.
  */
 object DurablePreprocessor:
 
@@ -33,6 +35,16 @@ object DurablePreprocessor:
 
     val awaitSymbol = Symbol.requiredMethod("cps.await")
 
+    // First, find DurableStorageBackend in scope to get the backend type S
+    val backendType: TypeRepr = Implicits.search(TypeRepr.of[DurableStorageBackend]) match
+      case iss: ImplicitSearchSuccess =>
+        iss.tree.tpe.widen
+      case isf: ImplicitSearchFailure =>
+        report.errorAndAbort(
+          s"No DurableStorageBackend found in scope. Add: given DurableStorageBackend = yourBackend",
+          body.asTerm.pos
+        )
+
     // Recursively widen union types - handles cases like 10 | 42 | 0 -> Int
     def widenAll(tpe: TypeRepr): TypeRepr = tpe match
       case OrType(left, right) =>
@@ -44,8 +56,9 @@ object DurablePreprocessor:
     def wrapWithActivity(expr: Term): Term =
       val exprType = widenAll(expr.tpe)
 
-      // Build: ctx.activitySync[A](expr, RetryPolicy.default)
-      // DurableStorage[A] is resolved via normal given resolution
+      // Build: ctx.activitySync[A, S](expr, RetryPolicy.default)
+      // where S is the DurableStorageBackend type resolved earlier
+      // DurableStorage[A, S] is resolved via normal given resolution
       // We use RetryPolicy.default for preprocessor-generated activities
       // Users can override by using Durable.activity(..., customPolicy) directly
 
@@ -53,12 +66,13 @@ object DurablePreprocessor:
       val retryPolicyModule = Symbol.requiredModule("durable.RetryPolicy")
       val defaultPolicy = Select(Ref(retryPolicyModule), retryPolicyModule.fieldMember("default"))
 
-      // Build: ctx.activitySync[A](expr, RetryPolicy.default)
+      // Build: ctx.activitySync[A, S](expr, RetryPolicy.default)
       val activityCall = Apply(
         TypeApply(
           Select.unique(ctx.asTerm, "activitySync"),
           List(
-            TypeTree.of(using exprType.asType)
+            TypeTree.of(using exprType.asType),
+            TypeTree.of(using backendType.asType)
           )
         ),
         List(expr, defaultPolicy)

@@ -9,8 +9,9 @@ import munit.FunSuite
 class DurableBasicTest extends FunSuite:
 
   // Provide storage via given (MemoryBackingStore pattern)
-  given backing: MemoryBackingStore = MemoryBackingStore()
-  given [T]: DurableStorage[T] = backing.forType[T]
+  val backing: MemoryBackingStore = MemoryBackingStore()
+  given MemoryBackingStore = backing
+  given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
   test("pure value") {
     val durable: Durable[Int] = Durable.pure(42)
@@ -58,7 +59,7 @@ class DurableBasicTest extends FunSuite:
   test("activity creates Activity node") {
     import scala.concurrent.Future
     var computed = false
-    val durable = Durable.activity[Int] {
+    val durable = Durable.activity {
       computed = true
       Future.successful(42)
     }
@@ -73,7 +74,7 @@ class DurableBasicTest extends FunSuite:
 
   test("activitySync creates Activity node") {
     var computed = false
-    val durable = Durable.activitySync[Int] {
+    val durable = Durable.activitySync {
       computed = true
       42
     }
@@ -107,10 +108,10 @@ class DurableBasicTest extends FunSuite:
   test("complex workflow builds correct structure") {
     import scala.concurrent.Future
     val durable = for
-      a <- Durable.activity[Int](Future.successful(10))
-      b <- Durable.activity[Int](Future.successful(20))
+      a <- Durable.activity(Future.successful(10))
+      b <- Durable.activity(Future.successful(20))
       _ <- Durable.suspend(WaitCondition.Event[String]("wait"))
-      c <- Durable.activity[Int](Future.successful(12))
+      c <- Durable.activity(Future.successful(12))
     yield a + b + c
 
     // Just verify it compiles and creates a FlatMap chain

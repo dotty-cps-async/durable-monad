@@ -9,12 +9,12 @@ import scala.jdk.CollectionConverters.*
  */
 trait DurableFunctionRegistryPlatform:
   def createRegistry(): DurableFunctionRegistry = new DurableFunctionRegistry:
-    private val functions = new ConcurrentHashMap[String, DurableFunction]()
+    private val functions = new ConcurrentHashMap[String, DurableFunction[?, ?]]()
 
-    def registerByName(name: String, f: DurableFunction): Unit =
+    def registerByName(name: String, f: DurableFunction[?, ?]): Unit =
       functions.putIfAbsent(name, f)
 
-    def lookup(name: String): Option[DurableFunction] =
+    def lookup(name: String): Option[DurableFunction[?, ?]] =
       Option(functions.get(name))
 
     def registeredNames: Set[String] =

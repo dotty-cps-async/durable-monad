@@ -9,31 +9,31 @@ import scala.quoted.*
  * Derivable via `derives DurableFunctionName` on object definitions.
  * Uses macro to extract the object's fully qualified type name at compile time.
  */
-trait DurableFunctionName[F <: DurableFunction]:
+trait DurableFunctionName[F <: DurableFunction[?, ?]]:
   def name: String
 
 object DurableFunctionName:
   /** Create a DurableFunctionName with explicit name */
-  def apply[F <: DurableFunction](n: String): DurableFunctionName[F] =
+  def apply[F <: DurableFunction[?, ?]](n: String): DurableFunctionName[F] =
     new DurableFunctionName[F]:
       def name: String = n
 
   /** Helper to get name from derived given */
-  inline def of[F <: DurableFunction](using fn: DurableFunctionName[F]): String = fn.name
+  inline def of[F <: DurableFunction[?, ?]](using fn: DurableFunctionName[F]): String = fn.name
 
   /**
    * Get name and register the function in the global registry.
    * Use this to initialize functionName val in DurableFunction objects.
    */
-  inline def ofAndRegister[F <: DurableFunction](f: F)(using fn: DurableFunctionName[F]): String =
+  inline def ofAndRegister[F <: DurableFunction[?, ?]](f: F)(using fn: DurableFunctionName[F]): String =
     DurableFunctionRegistry.global.registerByName(fn.name, f)
     fn.name
 
   /** Derive name from object's fully qualified type name using macro */
-  inline def derived[F <: DurableFunction]: DurableFunctionName[F] =
+  inline def derived[F <: DurableFunction[?, ?]]: DurableFunctionName[F] =
     ${ derivedImpl[F] }
 
-  private def derivedImpl[F <: DurableFunction: Type](using Quotes): Expr[DurableFunctionName[F]] =
+  private def derivedImpl[F <: DurableFunction[?, ?]: Type](using Quotes): Expr[DurableFunctionName[F]] =
     import quotes.reflect.*
     val tpe = TypeRepr.of[F]
     // Get full name, remove trailing $ for objects

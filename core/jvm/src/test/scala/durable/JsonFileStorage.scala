@@ -16,11 +16,11 @@ import scala.concurrent.Future
  *       activity-{index}.json     (success or failure)
  *       metadata.json             (workflow metadata)
  */
-class JsonFileStorage(baseDir: Path):
+class JsonFileStorage(baseDir: Path) extends DurableStorageBackend:
 
   import JsonFileStorage.given
 
-  def forType[T: JsonValueCodec]: DurableStorage[T] = new DurableStorage[T]:
+  def forType[T: JsonValueCodec]: DurableStorage[T, JsonFileStorage] = new DurableStorage[T, JsonFileStorage]:
     def store(workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
       val file = activityFile(workflowId, activityIndex)
       Files.createDirectories(file.getParent)
@@ -45,24 +45,35 @@ class JsonFileStorage(baseDir: Path):
       else
         Future.successful(None)
 
+    def backend: JsonFileStorage = JsonFileStorage.this
+
   private def workflowDir(workflowId: WorkflowId): Path =
     baseDir.resolve(workflowId.value.replace("/", "_"))
 
   private def activityFile(workflowId: WorkflowId, index: Int): Path =
     workflowDir(workflowId).resolve(s"activity-$index.json")
 
+  /** Clear all cached data for a workflow (implements DurableStorageBackend) */
+  def clear(workflowId: WorkflowId): Future[Unit] =
+    val dir = workflowDir(workflowId)
+    if Files.exists(dir) then
+      Files.walk(dir)
+        .sorted(java.util.Comparator.reverseOrder())
+        .forEach(Files.delete(_))
+    Future.successful(())
+
   /** Store workflow metadata */
-  def storeMetadata(workflowId: WorkflowId, metadata: WorkflowMetadata): Unit =
+  def storeMetadata(workflowId: WorkflowId, metadata: JsonWorkflowMetadata): Unit =
     val file = workflowDir(workflowId).resolve("metadata.json")
     Files.createDirectories(file.getParent)
     Files.writeString(file, writeToString(metadata), StandardCharsets.UTF_8)
 
   /** Load workflow metadata */
-  def loadMetadata(workflowId: WorkflowId): Option[WorkflowMetadata] =
+  def loadMetadata(workflowId: WorkflowId): Option[JsonWorkflowMetadata] =
     val file = workflowDir(workflowId).resolve("metadata.json")
     if Files.exists(file) then
       val json = Files.readString(file, StandardCharsets.UTF_8)
-      Some(readFromString[WorkflowMetadata](json))
+      Some(readFromString[JsonWorkflowMetadata](json))
     else
       None
 
@@ -76,8 +87,8 @@ class JsonFileStorage(baseDir: Path):
     else
       List.empty
 
-  /** Clean up storage directory */
-  def clear(): Unit =
+  /** Clean up entire storage directory */
+  def clearAll(): Unit =
     if Files.exists(baseDir) then
       Files.walk(baseDir)
         .sorted(java.util.Comparator.reverseOrder())
@@ -89,8 +100,8 @@ object JsonFileStorage:
 
   // JSON codecs for storage types
   given JsonValueCodec[StoredFailure] = JsonCodecMaker.make
-  given JsonValueCodec[WorkflowMetadata] = JsonCodecMaker.make
-  given JsonValueCodec[WorkflowStatus] = JsonCodecMaker.make
+  given JsonValueCodec[JsonWorkflowMetadata] = JsonCodecMaker.make
+  given JsonValueCodec[JsonWorkflowStatus] = JsonCodecMaker.make
 
   // Codec for StoredValue wrapper
   given [T: JsonValueCodec]: JsonValueCodec[StoredValue[T]] = JsonCodecMaker.make
@@ -108,7 +119,8 @@ object JsonFileStorage:
 case class StoredValue[T](value: Either[StoredFailure, T])
 
 /**
- * Workflow metadata stored for restoration.
+ * JSON-specific workflow metadata for cross-process test.
+ * Differs from main WorkflowMetadata by storing args as JSON.
  *
  * @param functionName Fully qualified function name for registry lookup
  * @param argTypes List of fully qualified type names for arguments
@@ -116,15 +128,15 @@ case class StoredValue[T](value: Either[StoredFailure, T])
  * @param activityIndex Current activity index (resume point)
  * @param status Current workflow status
  */
-case class WorkflowMetadata(
+case class JsonWorkflowMetadata(
   functionName: String,
   argTypes: List[String],  // Fully qualified type names
   argsJson: String,        // JSON-encoded arguments
   activityIndex: Int,
-  status: WorkflowStatus
+  status: JsonWorkflowStatus
 )
 
-enum WorkflowStatus:
+enum JsonWorkflowStatus:
   case Running
   case Suspended
   case Completed

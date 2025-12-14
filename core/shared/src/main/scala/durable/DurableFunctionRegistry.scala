@@ -9,12 +9,12 @@ package durable
  * - JS: simple Map (single-threaded)
  */
 trait DurableFunctionRegistry:
-  def registerByName(name: String, f: DurableFunction): Unit
+  def registerByName(name: String, f: DurableFunction[?, ?]): Unit
 
-  def lookup(name: String): Option[DurableFunction]
+  def lookup(name: String): Option[DurableFunction[?, ?]]
 
-  def lookupTyped[F <: DurableFunction](name: String): Option[F] =
-    lookup(name).map(_.asInstanceOf[F])
+  def lookupTyped[Args <: Tuple, R](name: String): Option[DurableFunction[Args, R]] =
+    lookup(name).map(_.asInstanceOf[DurableFunction[Args, R]])
 
   /** All registered function names */
   def registeredNames: Set[String]
