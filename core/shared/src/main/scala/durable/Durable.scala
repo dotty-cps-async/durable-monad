@@ -62,11 +62,10 @@ enum Durable[A]:
 
   /**
    * Suspend for external input - timer, event, child workflow, etc.
-   * Storage is captured for replay - when resumed, the event value is read from cache.
+   * Storage is captured in the WaitCondition for replay.
    */
   case Suspend[A, S <: DurableStorageBackend](
-    condition: WaitCondition[A],
-    storage: DurableStorage[A, S]
+    condition: WaitCondition[A, S]
   ) extends Durable[A]
 
   /** Try/catch semantics - handles both success and failure of fa */
@@ -77,16 +76,14 @@ enum Durable[A]:
    * Used for looping patterns since workflows are immutable.
    *
    * @param metadata New workflow metadata (functionName, argCount, activityIndex=argCount)
-   * @param storeArgs Closure to store new args at indices 0..argCount-1
+   * @param storeArgs Closure to store new args - takes (backend, workflowId, ec)
    * @param workflow Thunk to create the new workflow (lazy to avoid infinite recursion)
-   * @param backend Storage backend for clear operation
    */
-  case ContinueAs(
+  case ContinueAs[A](
     metadata: WorkflowMetadata,
-    storeArgs: (WorkflowId, ExecutionContext) => Future[Unit],
-    workflow: () => Durable[?],
-    backend: DurableStorageBackend
-  ) extends Durable[Nothing]
+    storeArgs: (DurableStorageBackend, WorkflowId, ExecutionContext) => Future[Unit],
+    workflow: () => Durable[A]
+  ) extends Durable[A]
 
   def map[B](f: A => B): Durable[B] =
     Durable.FlatMap(this, (a: A) => Durable.Pure(f(a)))
@@ -128,13 +125,13 @@ object Durable:
                      (using storage: DurableStorage[A, S]): Durable[A] =
     Activity(() => Future.successful(compute), storage, policy)
 
-  /** Suspend the workflow with a wait condition */
-  def suspend[A, S <: DurableStorageBackend](condition: WaitCondition[A])(using storage: DurableStorage[A, S]): Durable[A] =
-    Suspend(condition, storage)
+  /** Suspend the workflow with a wait condition (condition already contains storage) */
+  def suspend[A, S <: DurableStorageBackend](condition: WaitCondition[A, S]): Durable[A] =
+    Suspend(condition)
 
   /** Sleep until a specific instant, returns actual wake time */
   def sleepUntil[S <: DurableStorageBackend](wakeAt: Instant)(using storage: DurableStorage[Instant, S]): Durable[Instant] =
-    Suspend(WaitCondition.Timer(wakeAt), storage)
+    Suspend(WaitCondition.Timer(wakeAt, storage))
 
   /** Sleep for a duration, returns actual wake time */
   def sleep[S <: DurableStorageBackend](duration: FiniteDuration)(using storage: DurableStorage[Instant, S]): Durable[Instant] =
@@ -142,7 +139,7 @@ object Durable:
 
   /** Wait for a broadcast event of type E */
   def awaitEvent[E, S <: DurableStorageBackend](using eventName: DurableEventName[E], storage: DurableStorage[E, S]): Durable[E] =
-    Suspend(WaitCondition.Event(eventName.name), storage)
+    Suspend(WaitCondition.Event(eventName.name, storage))
 
   /**
    * Continue as a new workflow with the given arguments.
@@ -151,7 +148,7 @@ object Durable:
    * @param functionName Name of the function (for metadata)
    * @param args Tuple of arguments to store
    * @param workflow The new workflow to run (by-name to avoid infinite recursion)
-   * @return Durable[R] (via cast since ContinueAs never produces a value)
+   * @return Durable[R] - the result type of the continued workflow
    */
   def continueAs[Args <: Tuple, R, S <: DurableStorageBackend](
     functionName: String,
@@ -160,10 +157,10 @@ object Durable:
   )(using argsStorage: TupleDurableStorage[Args, S]): Durable[R] =
     val argCount = argsStorage.size
     val metadata = WorkflowMetadata(functionName, argCount, argCount)
-    val storeArgs = (wfId: WorkflowId, ec: ExecutionContext) =>
+    val storeArgsFn = (backend: DurableStorageBackend, wfId: WorkflowId, ec: ExecutionContext) =>
       given ExecutionContext = ec
-      argsStorage.storeAll(wfId, 0, args)
-    ContinueAs(metadata, storeArgs, () => workflow, argsStorage.backend).asInstanceOf[Durable[R]]
+      argsStorage.storeAll(backend.asInstanceOf[S], wfId, 0, args)
+    ContinueAs(metadata, storeArgsFn, () => workflow)
 
   /**
    * CpsMonadContext for Durable - provides context for async/await.

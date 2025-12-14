@@ -9,9 +9,9 @@ import munit.FunSuite
 class DurableBasicTest extends FunSuite:
 
   // Provide storage via given (MemoryBackingStore pattern)
+  import MemoryBackingStore.given
   val backing: MemoryBackingStore = MemoryBackingStore()
   given MemoryBackingStore = backing
-  given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
 
   test("pure value") {
     val durable: Durable[Int] = Durable.pure(42)
@@ -88,11 +88,11 @@ class DurableBasicTest extends FunSuite:
   }
 
   test("suspend creates Suspend node") {
-    val condition = WaitCondition.Event[String]("test-event")
-    val durable = Durable.suspend(condition)
+    given DurableEventName[String] = DurableEventName("test-event")
+    val durable = Durable.awaitEvent[String, MemoryBackingStore]
 
     durable match
-      case Durable.Suspend(WaitCondition.Event("test-event"), _) => () // ok - now has storage
+      case Durable.Suspend(WaitCondition.Event("test-event", _)) => () // ok - storage in condition
       case _ => fail("Expected Suspend with Event condition")
   }
 
@@ -107,10 +107,11 @@ class DurableBasicTest extends FunSuite:
 
   test("complex workflow builds correct structure") {
     import scala.concurrent.Future
+    given DurableEventName[String] = DurableEventName("wait")
     val durable = for
       a <- Durable.activity(Future.successful(10))
       b <- Durable.activity(Future.successful(20))
-      _ <- Durable.suspend(WaitCondition.Event[String]("wait"))
+      _ <- Durable.awaitEvent[String, MemoryBackingStore]
       c <- Durable.activity(Future.successful(12))
     yield a + b + c
 

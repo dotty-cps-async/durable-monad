@@ -101,7 +101,7 @@ class WorkflowRunnerTest extends FunSuite:
     backing.put(WorkflowId("test-6"), 0, Right(42))
 
     // Resume from index 1 (after index 0 is cached)
-    val ctx = RunContext(WorkflowId("test-6"), resumeFromIndex = 1)
+    val ctx = RunContext.resume(WorkflowId("test-6"), 1)
 
     var executeCount = 0
     val workflow = Durable.activity {
@@ -119,19 +119,20 @@ class WorkflowRunnerTest extends FunSuite:
     val backing = MemoryBackingStore()
     given MemoryBackingStore = backing
     given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given DurableEventName[String] = DurableEventName("waiting for signal")
     val ctx = RunContext.fresh(WorkflowId("test-7"))
 
     val workflow = for
       a <- Durable.pure[Int](10)
-      _ <- Durable.suspend(WaitCondition.Event[String]("waiting for signal"))
+      _ <- Durable.awaitEvent[String, MemoryBackingStore]
       b <- Durable.pure[Int](32)
     yield a + b
 
     WorkflowRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowResult.Suspended[?]])
-      val suspended = result.asInstanceOf[WorkflowResult.Suspended[Int]]
+      val suspended = result.asInstanceOf[WorkflowResult.Suspended[?]]
       suspended.condition match
-        case WaitCondition.Event(name) => assertEquals(name, "waiting for signal")
+        case WaitCondition.Event(name, _) => assertEquals(name, "waiting for signal")
         case _ => fail("Expected Event condition")
     }
   }
@@ -185,7 +186,7 @@ class WorkflowRunnerTest extends FunSuite:
     backing.put(workflowId, 1, Right(20))
 
     // Resume from index 2 (first two cached)
-    val ctx = RunContext(workflowId, resumeFromIndex = 2)
+    val ctx = RunContext.resume(workflowId, 2)
 
     var executeCount = 0
     val workflow = for

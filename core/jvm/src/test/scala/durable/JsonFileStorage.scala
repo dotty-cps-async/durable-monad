@@ -5,6 +5,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.*
 
 import java.nio.file.{Files, Path, Paths}
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 import scala.concurrent.Future
 
 /**
@@ -16,36 +17,13 @@ import scala.concurrent.Future
  *       activity-{index}.json     (success or failure)
  *       metadata.json             (workflow metadata)
  */
-class JsonFileStorage(baseDir: Path) extends DurableStorageBackend:
+class JsonFileStorage(val baseDir: Path) extends DurableStorageBackend:
 
   import JsonFileStorage.given
 
-  def forType[T: JsonValueCodec]: DurableStorage[T, JsonFileStorage] = new DurableStorage[T, JsonFileStorage]:
-    def store(workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
-      val file = activityFile(workflowId, activityIndex)
-      Files.createDirectories(file.getParent)
-      val wrapped = StoredValue[T](Right(value))
-      Files.writeString(file, writeToString(wrapped), StandardCharsets.UTF_8)
-      Future.successful(())
-
-    def storeFailure(workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
-      val file = activityFile(workflowId, activityIndex)
-      Files.createDirectories(file.getParent)
-      // Store failure with a dummy type - we only care about the Left side
-      val wrapped = StoredValue[T](Left(failure))
-      Files.writeString(file, writeToString(wrapped), StandardCharsets.UTF_8)
-      Future.successful(())
-
-    def retrieve(workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
-      val file = activityFile(workflowId, activityIndex)
-      if Files.exists(file) then
-        val json = Files.readString(file, StandardCharsets.UTF_8)
-        val wrapped = readFromString[StoredValue[T]](json)
-        Future.successful(Some(wrapped.value))
-      else
-        Future.successful(None)
-
-    def backend: JsonFileStorage = JsonFileStorage.this
+  /** Convenience method - returns the typeclass instance from companion */
+  def forType[T: JsonValueCodec]: DurableStorage[T, JsonFileStorage] =
+    summon[DurableStorage[T, JsonFileStorage]]
 
   private def workflowDir(workflowId: WorkflowId): Path =
     baseDir.resolve(workflowId.value.replace("/", "_"))
@@ -62,7 +40,36 @@ class JsonFileStorage(baseDir: Path) extends DurableStorageBackend:
         .forEach(Files.delete(_))
     Future.successful(())
 
-  /** Store workflow metadata */
+  // Engine methods - not implemented for this test storage
+  def saveWorkflowMetadata(workflowId: WorkflowId, metadata: WorkflowMetadata, status: WorkflowStatus): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def loadWorkflowMetadata(workflowId: WorkflowId): Future[Option[(WorkflowMetadata, WorkflowStatus)]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def updateWorkflowStatus(workflowId: WorkflowId, status: WorkflowStatus): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def updateWorkflowStatusAndCondition(
+    workflowId: WorkflowId,
+    status: WorkflowStatus,
+    waitCondition: Option[WaitCondition[?, ?]]
+  ): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def listActiveWorkflows(): Future[Seq[WorkflowRecord]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def loadPendingEvents(eventName: String): Future[Seq[PendingEvent[?]]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def removePendingEvent(eventName: String, eventId: EventId): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  /** Store workflow metadata (local JSON format) */
   def storeMetadata(workflowId: WorkflowId, metadata: JsonWorkflowMetadata): Unit =
     val file = workflowDir(workflowId).resolve("metadata.json")
     Files.createDirectories(file.getParent)
@@ -112,6 +119,37 @@ object JsonFileStorage:
   given JsonValueCodec[String] = JsonCodecMaker.make
   given JsonValueCodec[Boolean] = JsonCodecMaker.make
   given JsonValueCodec[Double] = JsonCodecMaker.make
+
+  /** Pure typeclass instance for DurableStorage */
+  given [T: JsonValueCodec]: DurableStorage[T, JsonFileStorage] with
+    private def workflowDir(backend: JsonFileStorage, workflowId: WorkflowId): Path =
+      backend.baseDir.resolve(workflowId.value.replace("/", "_"))
+
+    private def activityFile(backend: JsonFileStorage, workflowId: WorkflowId, index: Int): Path =
+      workflowDir(backend, workflowId).resolve(s"activity-$index.json")
+
+    def store(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
+      val file = activityFile(backend, workflowId, activityIndex)
+      Files.createDirectories(file.getParent)
+      val wrapped = StoredValue[T](Right(value))
+      Files.writeString(file, writeToString(wrapped), StandardCharsets.UTF_8)
+      Future.successful(())
+
+    def storeFailure(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
+      val file = activityFile(backend, workflowId, activityIndex)
+      Files.createDirectories(file.getParent)
+      val wrapped = StoredValue[T](Left(failure))
+      Files.writeString(file, writeToString(wrapped), StandardCharsets.UTF_8)
+      Future.successful(())
+
+    def retrieve(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
+      val file = activityFile(backend, workflowId, activityIndex)
+      if Files.exists(file) then
+        val json = Files.readString(file, StandardCharsets.UTF_8)
+        val wrapped = readFromString[StoredValue[T]](json)
+        Future.successful(Some(wrapped.value))
+      else
+        Future.successful(None)
 
 /**
  * Wrapper for stored values - either success or failure.

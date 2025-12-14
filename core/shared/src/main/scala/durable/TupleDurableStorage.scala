@@ -3,8 +3,11 @@ package durable
 import scala.concurrent.{Future, ExecutionContext}
 
 /**
- * Type class providing DurableStorage for each element of a tuple.
+ * Pure typeclass providing DurableStorage for each element of a tuple.
  * Enables storing tuple arguments with a single method call.
+ *
+ * This is a stateless typeclass - storage backend is passed as parameter.
+ * Instances can be summoned without a backend instance.
  *
  * Type parameters:
  *   T - the tuple type
@@ -16,32 +19,42 @@ import scala.concurrent.{Future, ExecutionContext}
  */
 trait TupleDurableStorage[T <: Tuple, S <: DurableStorageBackend]:
   /** Store all tuple elements starting at startIndex */
-  def storeAll(workflowId: WorkflowId, startIndex: Int, args: T)(using ExecutionContext): Future[Unit]
+  def storeAll(backend: S, workflowId: WorkflowId, startIndex: Int, args: T)(using ExecutionContext): Future[Unit]
+
+  /** Retrieve all tuple elements starting at startIndex */
+  def retrieveAll(backend: S, workflowId: WorkflowId, startIndex: Int)(using ExecutionContext): Future[Option[T]]
 
   /** Number of elements in the tuple */
   def size: Int
 
-  /** Access to the underlying storage backend */
-  def backend: S
-
 object TupleDurableStorage:
   /** Base case: empty tuple */
-  given [S <: DurableStorageBackend](using b: S): TupleDurableStorage[EmptyTuple, S] with
-    def storeAll(workflowId: WorkflowId, startIndex: Int, args: EmptyTuple)(using ExecutionContext): Future[Unit] =
+  given [S <: DurableStorageBackend]: TupleDurableStorage[EmptyTuple, S] with
+    def storeAll(backend: S, workflowId: WorkflowId, startIndex: Int, args: EmptyTuple)(using ExecutionContext): Future[Unit] =
       Future.successful(())
+    def retrieveAll(backend: S, workflowId: WorkflowId, startIndex: Int)(using ExecutionContext): Future[Option[EmptyTuple]] =
+      Future.successful(Some(EmptyTuple))
     def size: Int = 0
-    def backend: S = b
 
   /** Inductive case: H *: T */
   given [H, T <: Tuple, S <: DurableStorageBackend](using
     headStorage: DurableStorage[H, S],
     tailStorage: TupleDurableStorage[T, S]
   ): TupleDurableStorage[H *: T, S] with
-    def storeAll(workflowId: WorkflowId, startIndex: Int, args: H *: T)(using ExecutionContext): Future[Unit] =
+    def storeAll(backend: S, workflowId: WorkflowId, startIndex: Int, args: H *: T)(using ExecutionContext): Future[Unit] =
       val head *: tail = args
       for
-        _ <- headStorage.store(workflowId, startIndex, head)
-        _ <- tailStorage.storeAll(workflowId, startIndex + 1, tail)
+        _ <- headStorage.store(backend, workflowId, startIndex, head)
+        _ <- tailStorage.storeAll(backend, workflowId, startIndex + 1, tail)
       yield ()
+    def retrieveAll(backend: S, workflowId: WorkflowId, startIndex: Int)(using ExecutionContext): Future[Option[H *: T]] =
+      for
+        headOpt <- headStorage.retrieve(backend, workflowId, startIndex)
+        tailOpt <- tailStorage.retrieveAll(backend, workflowId, startIndex + 1)
+      yield
+        for
+          headEither <- headOpt
+          head <- headEither.toOption  // Ignore failures - args should always be stored as success
+          tail <- tailOpt
+        yield head *: tail
     def size: Int = 1 + tailStorage.size
-    def backend: S = headStorage.backend

@@ -8,16 +8,16 @@ import scala.collection.mutable
  */
 trait DurableFunctionRegistryPlatform:
   def createRegistry(): DurableFunctionRegistry = new DurableFunctionRegistry:
-    private val functions = mutable.Map.empty[String, DurableFunction[?, ?]]
+    private val records = mutable.Map.empty[String, FunctionRecord]
 
-    def registerByName(name: String, f: DurableFunction[?, ?]): Unit =
-      if !functions.contains(name) then
-        functions.put(name, f)
+    def register(name: String, record: FunctionRecord): Unit =
+      if !records.contains(name) then
+        records.put(name, record)
 
-    def lookup(name: String): Option[DurableFunction[?, ?]] =
-      functions.get(name)
+    def lookup(name: String): Option[FunctionRecord] =
+      records.get(name)
 
     def registeredNames: Set[String] =
-      functions.keySet.toSet
+      records.keySet.toSet
 
-    def size: Int = functions.size
+    def size: Int = records.size

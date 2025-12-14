@@ -12,7 +12,7 @@ enum WorkflowResult[+A]:
   case Completed(value: A)
 
   /** Workflow suspended, waiting for external input */
-  case Suspended(snapshot: DurableSnapshot, condition: WaitCondition[?])
+  case Suspended[S <: DurableStorageBackend](snapshot: DurableSnapshot, condition: WaitCondition[?, S]) extends WorkflowResult[Nothing]
 
   /** Workflow failed with an error */
   case Failed(error: Throwable)
@@ -22,13 +22,11 @@ enum WorkflowResult[+A]:
    * Engine should clear activity storage, store new args, and run the new workflow.
    *
    * @param metadata New workflow metadata (functionName, argCount, activityIndex=argCount)
-   * @param storeArgs Closure to store new args at indices 0..argCount-1
+   * @param storeArgs Closure to store new args - takes (backend, workflowId, ec)
    * @param workflow Thunk to create the new workflow (lazy to avoid infinite recursion)
-   * @param backend Storage backend for clear operation
    */
-  case ContinueAs(
+  case ContinueAs[A](
     metadata: WorkflowMetadata,
-    storeArgs: (WorkflowId, ExecutionContext) => Future[Unit],
-    workflow: () => Durable[?],
-    backend: DurableStorageBackend
-  )
+    storeArgs: (DurableStorageBackend, WorkflowId, ExecutionContext) => Future[Unit],
+    workflow: () => Durable[A]
+  ) extends WorkflowResult[A]

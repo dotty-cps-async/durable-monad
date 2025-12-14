@@ -78,7 +78,7 @@ class DurablePreprocessorTest extends FunSuite:
 
       // Second run - replay from cache
       computeCount = 0
-      val ctx2 = RunContext(workflowId, resumeFromIndex = 2)
+      val ctx2 = RunContext.resume(workflowId, 2)
       WorkflowRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowResult.Completed(42))
         assertEquals(computeCount, 0) // NOT recomputed - from cache
@@ -255,7 +255,7 @@ class DurablePreprocessorTest extends FunSuite:
 
       // Second run (replay) - should use cached condition value (true)
       // even though nonDeterministicCondition() would now return false
-      val ctx2 = RunContext(workflowId, resumeFromIndex = 2)  // both condition and result cached
+      val ctx2 = RunContext.resume(workflowId, 2)  // both condition and result cached
       WorkflowRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowResult.Completed(42))  // same result
         assertEquals(condCallCount, 0)  // condition NOT re-evaluated
@@ -307,7 +307,7 @@ class DurablePreprocessorTest extends FunSuite:
 
       // Second run (replay) - should use cached scrutinee value (1)
       // even though nonDeterministicValue() would now return 2
-      val ctx2 = RunContext(workflowId, resumeFromIndex = 3)  // x, scrutinee, and result cached
+      val ctx2 = RunContext.resume(workflowId, 3)  // x, scrutinee, and result cached
       WorkflowRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowResult.Completed(42))  // same result
         assertEquals(scrutineeCallCount, 0)  // scrutinee NOT re-evaluated

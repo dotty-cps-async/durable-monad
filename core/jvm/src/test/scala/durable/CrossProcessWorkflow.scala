@@ -11,23 +11,28 @@ import java.nio.file.{Files, Path, Paths}
 /**
  * Test workflow for cross-process persistence testing.
  * Does an activity, then suspends waiting for an event.
+ * Uses JsonFileStorage as the concrete backend type.
  */
-object CrossProcessWorkflow extends DurableFunction[Tuple1[String], String] derives DurableFunctionName:
-  override val functionName = DurableFunctionName.ofAndRegister(this)
+object CrossProcessWorkflow extends DurableFunction[Tuple1[String], String, JsonFileStorage] derives DurableFunctionName:
+  import JsonFileStorage.given
 
-  override def apply[S <: DurableStorageBackend](args: Tuple1[String])(using
-    backend: S,
-    argsStorage: TupleDurableStorage[Tuple1[String], S],
-    resultStorage: DurableStorage[String, S]
+  override val functionName: String = DurableFunctionName.ofAndRegister(this)
+
+  override def apply(args: Tuple1[String])(using
+    backend: JsonFileStorage,
+    argsStorage: TupleDurableStorage[Tuple1[String], JsonFileStorage],
+    resultStorage: DurableStorage[String, JsonFileStorage]
   ): Durable[String] =
+    // Event name for this workflow
+    given DurableEventName[String] = DurableEventName("continue-signal")
     val Tuple1(input) = args
     for
       // First activity - will be cached
       step1 <- Durable.activity {
         Future.successful(s"Processed: $input")
       }
-      // Suspend - waiting for external event
-      _ <- Durable.suspend(WaitCondition.Event[String]("continue-signal"))
+      // Suspend - waiting for external event (uses resultStorage since event is String)
+      _ <- Durable.awaitEvent[String, JsonFileStorage]
       // Second activity - only runs after resume
       step2 <- Durable.activity {
         Future.successful(s"$step1 - completed!")
@@ -86,7 +91,7 @@ object ProcessA:
         println(s"[ProcessA] Workflow failed: ${error.getMessage}")
         sys.exit(1)
 
-      case WorkflowResult.ContinueAs(_, _, _, _) =>
+      case WorkflowResult.ContinueAs(_, _, _) =>
         println(s"[ProcessA] Workflow requested continueAs unexpectedly")
         sys.exit(1)
 
@@ -129,22 +134,22 @@ object ProcessB:
       throw new RuntimeException("unreachable")
     }
 
-    println(s"[ProcessB] Found function in registry: ${function.functionName}")
+    println(s"[ProcessB] Found function in registry: ${function.function.functionName}")
 
     // Deserialize args and recreate workflow
     val input = readFromString[String](metadata.argsJson)(using JsonFileStorage.given_JsonValueCodec_String)
-    val workflow = function.asInstanceOf[DurableFunction[Tuple1[String], String]].apply(Tuple1(input))
+    val workflow = function.function.asInstanceOf[DurableFunction[Tuple1[String], String, JsonFileStorage]].apply(Tuple1(input))
 
     // Store the event value at the suspend point index
     // This simulates the event being delivered
     println(s"[ProcessB] Storing event value '$eventValue' at index ${metadata.activityIndex}")
     Await.result(
-      storage.forType[String].store(workflowId, metadata.activityIndex, eventValue),
+      storage.forType[String].store(storage, workflowId, metadata.activityIndex, eventValue),
       5.seconds
     )
 
     // Resume from saved index + 1 (past the suspend point)
-    val ctx = RunContext(workflowId, resumeFromIndex = metadata.activityIndex + 1)
+    val ctx = RunContext.resume(workflowId, metadata.activityIndex + 1)
 
     println(s"[ProcessB] Resuming workflow from index ${metadata.activityIndex + 1}")
 
@@ -168,6 +173,6 @@ object ProcessB:
         error.printStackTrace()
         sys.exit(1)
 
-      case WorkflowResult.ContinueAs(_, _, _, _) =>
+      case WorkflowResult.ContinueAs(_, _, _) =>
         println(s"[ProcessB] Workflow requested continueAs unexpectedly")
         sys.exit(1)

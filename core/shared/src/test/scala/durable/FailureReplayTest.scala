@@ -63,7 +63,7 @@ class FailureReplayTest extends FunSuite:
     )
 
     // Replay from index 1 (activity at index 0 should be replayed from cache)
-    val ctx = RunContext(WorkflowId("failure-replay-1"), resumeFromIndex = 1, testConfig)
+    val ctx = RunContext.resume(WorkflowId("failure-replay-1"), 1, testConfig)
     WorkflowRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowResult.Failed(e) =>
@@ -126,7 +126,7 @@ class FailureReplayTest extends FunSuite:
     })
 
     // Replay from index 1
-    val ctx = RunContext(WorkflowId("failure-catch-1"), resumeFromIndex = 1, testConfig)
+    val ctx = RunContext.resume(WorkflowId("failure-catch-1"), 1, testConfig)
     WorkflowRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowResult.Completed(-1))
     }
@@ -173,7 +173,7 @@ class FailureReplayTest extends FunSuite:
       shouldFail = false  // Won't matter - we're replaying from cache
 
       // Replay - should catch ReplayedException (transformed catch pattern matches it)
-      val ctx2 = RunContext(WorkflowId("catch-test"), 1, testConfig)
+      val ctx2 = RunContext.resume(WorkflowId("catch-test"), 1, testConfig)
       WorkflowRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowResult.Completed(-1))  // Caught replayed
       }
@@ -214,7 +214,7 @@ class FailureReplayTest extends FunSuite:
       shouldFail = false  // Won't matter - replaying
 
       // Replay - e is ReplayedException but handler activity is cached
-      val ctx2 = RunContext(WorkflowId("handler-test"), 2, testConfig)
+      val ctx2 = RunContext.resume(WorkflowId("handler-test"), 2, testConfig)
       WorkflowRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowResult.Completed(14))  // Same result - cached!
         // Note: capturedMessage might be different on replay since e.getMessage
@@ -240,7 +240,7 @@ class FailureReplayTest extends FunSuite:
     yield a + b
 
     // Replay from index 2 (both should be replayed)
-    val ctx = RunContext(WorkflowId("seq-1"), resumeFromIndex = 2, testConfig)
+    val ctx = RunContext.resume(WorkflowId("seq-1"), 2, testConfig)
     WorkflowRunner.run(workflow, ctx).map { result =>
       // Second activity's failure should propagate
       result match

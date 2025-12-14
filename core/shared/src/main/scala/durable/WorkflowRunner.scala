@@ -48,14 +48,27 @@ object WorkflowRunner:
     workflow: Durable[A],
     ctx: RunContext
   )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
-    val state = new InterpreterState(ctx.resumeFromIndex)
+    val state = new InterpreterState(ctx.resumeFromIndex, ctx.activityOffset)
     stepsUntilSuspend[A](workflow, ctx, state, Nil)
 
   /**
    * Mutable interpreter state for tracking activity index at runtime.
+   *
+   * Activity indices are assigned sequentially starting from activityOffset.
+   * This allows the engine to store args at indices 0..argCount-1,
+   * and activities start at argCount.
+   *
+   * For replay:
+   * - resumeFromIndex indicates the first index to execute fresh
+   * - indices < resumeFromIndex are replayed from cache
+   * - indices >= resumeFromIndex are executed fresh
+   *
+   * @param resumeFromIndex First index to execute fresh (indices below are replayed)
+   * @param activityOffset Starting index for activities (to skip over stored args)
    */
-  private class InterpreterState(val resumeFromIndex: Int):
-    private var _currentIndex: Int = 0
+  private class InterpreterState(val resumeFromIndex: Int, val activityOffset: Int = 0):
+    // Start current index at activityOffset (default 0 for direct runner use)
+    private var _currentIndex: Int = activityOffset
 
     /** Get current index and increment for next activity */
     def nextIndex(): Int =
@@ -106,9 +119,14 @@ object WorkflowRunner:
       case suspend: Durable.Suspend[a, s] =>
         handleSuspend[A, a, s](suspend, ctx, state, stack)
 
-      case Durable.ContinueAs(metadata, storeArgs, workflow, backend) =>
+      case continueAs: Durable.ContinueAs[a] =>
         // ContinueAs is a terminal operation - return result for engine to handle
-        Future.successful(WorkflowResult.ContinueAs(metadata, storeArgs, workflow, backend))
+        // Type a = A by GADT refinement, cast is safe
+        Future.successful(WorkflowResult.ContinueAs(
+          continueAs.metadata,
+          continueAs.storeArgs,
+          continueAs.workflow
+        ).asInstanceOf[WorkflowResult[A]])
 
   /**
    * Continue with a result (success or failure), applying the next continuation from the stack.
@@ -194,12 +212,13 @@ object WorkflowRunner:
     val compute = activity.compute
     val storage = activity.storage
     val policy = activity.retryPolicy
+    val backend = ctx.backend.asInstanceOf[S]
     // Assign index at runtime
     val index = state.nextIndex()
 
     if state.isReplayingAt(index) then
       // Replaying - retrieve from cache (success or failure)
-      storage.retrieve(ctx.workflowId, index).flatMap {
+      storage.retrieve(backend, ctx.workflowId, index).flatMap {
         case Some(Right(cached)) =>
           // Cached success
           continueWith(Success(cached), ctx, state, stack)
@@ -218,12 +237,12 @@ object WorkflowRunner:
       executeWithRetry(compute, policy, ctx, index).transformWith {
         case Success(result) =>
           // Store success - if storage fails, fail workflow (no retry on storage)
-          storage.store(ctx.workflowId, index, result).flatMap { _ =>
+          storage.store(backend, ctx.workflowId, index, result).flatMap { _ =>
             continueWith(Success(result), ctx, state, stack)
           }
         case Failure(e) =>
           // Store failure for deterministic replay
-          storage.storeFailure(ctx.workflowId, index, StoredFailure.fromThrowable(e)).flatMap { _ =>
+          storage.storeFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)).flatMap { _ =>
             continueWith(Failure(e), ctx, state, stack)
           }
       }.recoverWith { case e =>
@@ -233,7 +252,7 @@ object WorkflowRunner:
 
   /**
    * Handle Suspend - assign index, check cache for replay, otherwise suspend.
-   * Uses the DurableStorage captured in the Suspend node.
+   * Storage is extracted from the WaitCondition.
    * Type parameter S is the storage backend type.
    *
    * On replay (index < resumeFromIndex), the event value should be cached.
@@ -245,14 +264,15 @@ object WorkflowRunner:
     state: InterpreterState,
     stack: List[StackFrame]
   )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
-    val storage = suspend.storage
     val condition = suspend.condition
+    val storage = condition.getStorage
+    val backend = ctx.backend.asInstanceOf[S]
     // Assign index at runtime (like Activity)
     val index = state.nextIndex()
 
     if state.isReplayingAt(index) then
       // Replaying - retrieve event value from cache
-      storage.retrieve(ctx.workflowId, index).flatMap {
+      storage.retrieve(backend, ctx.workflowId, index).flatMap {
         case Some(Right(cached)) =>
           // Cached event value - continue with it
           continueWith(Success(cached), ctx, state, stack)
@@ -367,34 +387,44 @@ object RunConfig:
 /**
  * Execution context for the workflow runner.
  *
- * Storage is no longer needed here - each Activity captures its own storage.
- *
  * @param workflowId Unique identifier for this workflow instance
- * @param resumeFromIndex Activity index to resume from (0 = fresh start)
+ * @param backend Storage backend instance (passed to storage typeclass methods)
+ * @param resumeFromIndex Activity index to resume from (0 = fresh start, indices < this are replayed)
+ * @param activityOffset Starting index for activity assignment (to skip stored args when run via engine)
  * @param config Runner configuration (logging, scheduling)
  */
 case class RunContext(
   workflowId: WorkflowId,
+  backend: DurableStorageBackend,
   resumeFromIndex: Int,
+  activityOffset: Int = 0,
   config: RunConfig = RunConfig.default
 )
 
 object RunContext:
   /** Create a fresh context for new workflow execution */
-  def fresh(workflowId: WorkflowId): RunContext =
-    RunContext(workflowId, 0)
+  def fresh(workflowId: WorkflowId)(using backend: DurableStorageBackend): RunContext =
+    RunContext(workflowId, backend, resumeFromIndex = 0)
 
   /** Create a fresh context with custom configuration */
-  def fresh(workflowId: WorkflowId, config: RunConfig): RunContext =
-    RunContext(workflowId, 0, config)
+  def fresh(workflowId: WorkflowId, config: RunConfig)(using backend: DurableStorageBackend): RunContext =
+    RunContext(workflowId, backend, resumeFromIndex = 0, config = config)
+
+  /** Create a context for resuming from a specific index */
+  def resume(workflowId: WorkflowId, resumeFromIndex: Int)(using backend: DurableStorageBackend): RunContext =
+    RunContext(workflowId, backend, resumeFromIndex)
+
+  /** Create a context for resuming with custom configuration */
+  def resume(workflowId: WorkflowId, resumeFromIndex: Int, config: RunConfig)(using backend: DurableStorageBackend): RunContext =
+    RunContext(workflowId, backend, resumeFromIndex, config = config)
 
   /** Create a context for resuming from snapshot */
-  def fromSnapshot(snapshot: DurableSnapshot): RunContext =
-    RunContext(snapshot.workflowId, snapshot.activityIndex)
+  def fromSnapshot(snapshot: DurableSnapshot)(using backend: DurableStorageBackend): RunContext =
+    RunContext(snapshot.workflowId, backend, snapshot.activityIndex)
 
   /** Create a context for resuming from snapshot with custom configuration */
-  def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig): RunContext =
-    RunContext(snapshot.workflowId, snapshot.activityIndex, config)
+  def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig)(using backend: DurableStorageBackend): RunContext =
+    RunContext(snapshot.workflowId, backend, snapshot.activityIndex, config = config)
 
 
 /**

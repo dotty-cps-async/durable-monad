@@ -1,5 +1,7 @@
 package durable
 
+import java.time.Instant
+
 /**
  * Metadata for a workflow instance - used for persistence and restart.
  *
@@ -20,9 +22,50 @@ case class WorkflowMetadata(
 
 /**
  * Workflow execution status - managed by the engine.
+ *
+ * Terminal states:
+ *   - Succeeded: finished with result value
+ *   - Failed: finished with error/exception
+ *   - Cancelled: externally cancelled
  */
 enum WorkflowStatus:
   case Running
   case Suspended
-  case Completed
-  case Failed
+  case Succeeded   // finished with result
+  case Failed      // finished with error
+  case Cancelled   // externally cancelled
+
+/**
+ * Full workflow record for persistence and in-memory cache.
+ */
+case class WorkflowRecord(
+  id: WorkflowId,
+  metadata: WorkflowMetadata,
+  status: WorkflowStatus,
+  waitCondition: Option[WaitCondition[?, ?]],
+  parentId: Option[WorkflowId],
+  createdAt: Instant,
+  updatedAt: Instant
+)
+
+/**
+ * Unique identifier for pending events.
+ */
+opaque type EventId = String
+
+object EventId:
+  def apply(s: String): EventId = s
+  def generate(): EventId = java.util.UUID.randomUUID().toString
+
+  extension (id: EventId)
+    def value: String = id
+
+/**
+ * Event waiting to be delivered to a workflow.
+ */
+case class PendingEvent[E](
+  eventId: EventId,
+  eventName: String,
+  value: E,
+  timestamp: Instant
+)

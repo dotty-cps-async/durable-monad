@@ -6,14 +6,16 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 class ContinueAsTest extends FunSuite:
 
-  // Test workflows using unified DurableFunction[Args, R]
-  object CounterWorkflow extends DurableFunction[Tuple1[Int], Int] derives DurableFunctionName:
+  // Test workflows using unified DurableFunction[Args, R, S]
+  import MemoryBackingStore.given
+
+  object CounterWorkflow extends DurableFunction[Tuple1[Int], Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply[S <: DurableStorageBackend](args: Tuple1[Int])(using
-      backend: S,
-      argsStorage: TupleDurableStorage[Tuple1[Int], S],
-      resultStorage: DurableStorage[Int, S]
+    def apply(args: Tuple1[Int])(using
+      backend: MemoryBackingStore,
+      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
+      resultStorage: DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] =
       val Tuple1(count) = args
       if count <= 0 then
@@ -22,29 +24,29 @@ class ContinueAsTest extends FunSuite:
         val newCount = count - 1
         Durable.continueAs(functionName, Tuple1(newCount), apply(Tuple1(newCount)))
 
-  object SwitchWorkflow extends DurableFunction[Tuple1[String], String] derives DurableFunctionName:
+  object SwitchWorkflow extends DurableFunction[Tuple1[String], String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply[S <: DurableStorageBackend](args: Tuple1[String])(using
-      backend: S,
-      argsStorage: TupleDurableStorage[Tuple1[String], S],
-      resultStorage: DurableStorage[String, S]
+    def apply(args: Tuple1[String])(using
+      backend: MemoryBackingStore,
+      argsStorage: TupleDurableStorage[Tuple1[String], MemoryBackingStore],
+      resultStorage: DurableStorage[String, MemoryBackingStore]
     ): Durable[String] =
       val Tuple1(input) = args
       Durable.pure(s"Switched to: $input")
 
-  object TransitionWorkflow extends DurableFunction[Tuple1[Int], String] derives DurableFunctionName:
+  object TransitionWorkflow extends DurableFunction[Tuple1[Int], String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply[S <: DurableStorageBackend](args: Tuple1[Int])(using
-      backend: S,
-      argsStorage: TupleDurableStorage[Tuple1[Int], S],
-      resultStorage: DurableStorage[String, S]
+    def apply(args: Tuple1[Int])(using
+      backend: MemoryBackingStore,
+      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
+      resultStorage: DurableStorage[String, MemoryBackingStore]
     ): Durable[String] =
       val Tuple1(n) = args
       if n > 0 then
         val newArg = s"from-$n"
-        // TupleDurableStorage[Tuple1[String], S] is derived automatically from DurableStorage[String, S]
+        // TupleDurableStorage[Tuple1[String], MemoryBackingStore] is derived automatically from DurableStorage[String, MemoryBackingStore]
         Durable.continueAs(SwitchWorkflow.functionName, Tuple1(newArg), SwitchWorkflow(Tuple1(newArg)))
       else
         Durable.pure("stayed")
@@ -60,7 +62,7 @@ class ContinueAsTest extends FunSuite:
     val result = WorkflowRunner.run(workflow, ctx).value.get.get
 
     result match
-      case WorkflowResult.ContinueAs(metadata, _, _, _) =>
+      case WorkflowResult.ContinueAs(metadata, _, _) =>
         assertEquals(metadata.functionName, "durable.ContinueAsTest.CounterWorkflow")
         assertEquals(metadata.argCount, 1)
         assertEquals(metadata.activityIndex, 1)
@@ -79,7 +81,7 @@ class ContinueAsTest extends FunSuite:
     val result = WorkflowRunner.run(workflow, ctx).value.get.get
 
     result match
-      case WorkflowResult.ContinueAs(metadata, _, _, _) =>
+      case WorkflowResult.ContinueAs(metadata, _, _) =>
         assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")
         assertEquals(metadata.argCount, 1)
       case other =>
@@ -98,10 +100,10 @@ class ContinueAsTest extends FunSuite:
     for
       result <- WorkflowRunner.run(workflow, ctx)
       _ <- result match
-        case WorkflowResult.ContinueAs(_, storeArgs, _, _) =>
+        case WorkflowResult.ContinueAs(_, storeArgs, _) =>
           for
-            _ <- storeArgs(workflowId, global)
-            stored <- backing.forType[Int].retrieve(workflowId, 0)
+            _ <- storeArgs(backing, workflowId, global)
+            stored <- backing.forType[Int].retrieve(backing, workflowId, 0)
           yield assertEquals(stored, Some(Right(4))) // 5 - 1 = 4
         case other =>
           Future.failed(AssertionError(s"Expected ContinueAs, got $other"))
@@ -134,11 +136,12 @@ class ContinueAsTest extends FunSuite:
 
   test("WorkflowStatus enum has correct values") {
     val statuses = WorkflowStatus.values
-    assertEquals(statuses.length, 4)
+    assertEquals(statuses.length, 5)
     assert(statuses.contains(WorkflowStatus.Running))
     assert(statuses.contains(WorkflowStatus.Suspended))
-    assert(statuses.contains(WorkflowStatus.Completed))
+    assert(statuses.contains(WorkflowStatus.Succeeded))
     assert(statuses.contains(WorkflowStatus.Failed))
+    assert(statuses.contains(WorkflowStatus.Cancelled))
   }
 
   test("TupleDurableStorage stores tuple elements") {
@@ -150,9 +153,9 @@ class ContinueAsTest extends FunSuite:
     val workflowId = WorkflowId("test-tuple-storage")
 
     for
-      _ <- tupleStorage.storeAll(workflowId, 0, ("hello", 42))
-      storedString <- backing.forType[String].retrieve(workflowId, 0)
-      storedInt <- backing.forType[Int].retrieve(workflowId, 1)
+      _ <- tupleStorage.storeAll(backing, workflowId, 0, ("hello", 42))
+      storedString <- backing.forType[String].retrieve(backing, workflowId, 0)
+      storedInt <- backing.forType[Int].retrieve(backing, workflowId, 1)
     yield
       assertEquals(storedString, Some(Right("hello")))
       assertEquals(storedInt, Some(Right(42)))

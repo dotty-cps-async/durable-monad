@@ -103,7 +103,7 @@ class CrossProcessTest extends FunSuite:
     // Verify it's in the registry
     val lookup = DurableFunctionRegistry.global.lookup("durable.CrossProcessWorkflow")
     assert(lookup.isDefined, "CrossProcessWorkflow should be in registry")
-    assertEquals(lookup.get.functionName, "durable.CrossProcessWorkflow")
+    assertEquals(lookup.get.function.functionName, "durable.CrossProcessWorkflow")
 
     // Provide storage for workflow creation
     val tempDir = Files.createTempDirectory("durable-registry-test-")
@@ -113,7 +113,7 @@ class CrossProcessTest extends FunSuite:
 
     try
       // Verify we can cast and call it
-      val function = lookup.get.asInstanceOf[DurableFunction[Tuple1[String], String]]
+      val function = lookup.get.function.asInstanceOf[DurableFunction[Tuple1[String], String, JsonFileStorage]]
       val workflow = function.apply(Tuple1("test"))
       assert(workflow.isInstanceOf[Durable[String]], "Should return Durable[String]")
     finally

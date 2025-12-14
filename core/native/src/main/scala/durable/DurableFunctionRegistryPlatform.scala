@@ -8,15 +8,15 @@ import scala.collection.concurrent.TrieMap
  */
 trait DurableFunctionRegistryPlatform:
   def createRegistry(): DurableFunctionRegistry = new DurableFunctionRegistry:
-    private val functions = TrieMap.empty[String, DurableFunction[?, ?]]
+    private val records = TrieMap.empty[String, FunctionRecord]
 
-    def registerByName(name: String, f: DurableFunction[?, ?]): Unit =
-      functions.putIfAbsent(name, f)
+    def register(name: String, record: FunctionRecord): Unit =
+      records.putIfAbsent(name, record)
 
-    def lookup(name: String): Option[DurableFunction[?, ?]] =
-      functions.get(name)
+    def lookup(name: String): Option[FunctionRecord] =
+      records.get(name)
 
     def registeredNames: Set[String] =
-      functions.keySet.toSet
+      records.keySet.toSet
 
-    def size: Int = functions.size
+    def size: Int = records.size

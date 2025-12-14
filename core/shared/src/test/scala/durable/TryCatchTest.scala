@@ -196,7 +196,7 @@ class TryCatchTest extends FunSuite:
       assertEquals(callCount, 1)
 
       // Replay should use cached value - resumeFromIndex=1 means index 0 is replayed from cache
-      val ctx2 = RunContext(WorkflowId("try-catch-8"), 1, testConfig)
+      val ctx2 = RunContext.resume(WorkflowId("try-catch-8"), 1, testConfig)
       WorkflowRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowResult.Completed(11))
         assertEquals(callCount, 1)  // Not called again
