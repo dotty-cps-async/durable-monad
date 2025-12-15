@@ -42,33 +42,8 @@ lazy val coreJS = core.js
 lazy val coreNative = core.native
 
 lazy val root = project.in(file("."))
-  .aggregate(coreJVM, coreJS, coreNative, controllerJS, scriptsJS)
+  .aggregate(coreJVM, coreJS, coreNative)
   .settings(
     name := "durable-monad",
     publish / skip := true
-  )
-
-// Controller for durable scripts (JS only - uses Node.js)
-lazy val controllerJS = project.in(file("controller-js"))
-  .enablePlugins(ScalaJSPlugin)
-  .dependsOn(coreJS)
-  .settings(
-    name := "durable-monad-scalajs-controller",
-    scalaJSUseMainModuleInitializer := true,
-    scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.ESModule) },
-    Compile / mainClass := Some("example.ControllerMain")
-  )
-
-// Isolated scripts that can run in VM contexts (JS only)
-lazy val scriptsJS = project.in(file("scripts-js"))
-  .enablePlugins(ScalaJSPlugin)
-  .dependsOn(coreJS)
-  .settings(
-    name := "scalajs-scripts",
-    scalaJSUseMainModuleInitializer := false,
-    scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.NoModule) },
-    libraryDependencies ++= Seq(
-      "org.typelevel" %%% "cats-effect" % catsEffectVersion,
-      cpsAsyncOrg %%% "dotty-cps-async" % cpsAsyncVersion
-    )
   )
