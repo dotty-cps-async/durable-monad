@@ -77,7 +77,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       case WorkflowResult.Failed(error) =>
         handleFailed(workflowId, error)
 
-      case ca: WorkflowResult.ContinueAs[A] =>
+      case ca: WorkflowResult.ContinueAs[A] @unchecked =>
         handleContinueAs(workflowId, ca, resultStorage)
     }.recover { case e =>
       // Unexpected error in runner
