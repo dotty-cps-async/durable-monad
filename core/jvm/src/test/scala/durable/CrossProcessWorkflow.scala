@@ -13,19 +13,18 @@ import java.nio.file.{Files, Path, Paths}
  * Does an activity, then suspends waiting for an event.
  * Uses JsonFileStorage as the concrete backend type.
  */
-object CrossProcessWorkflow extends DurableFunction[Tuple1[String], String, JsonFileStorage] derives DurableFunctionName:
+object CrossProcessWorkflow extends DurableFunction1[String, String, JsonFileStorage] derives DurableFunctionName:
   import JsonFileStorage.given
 
   override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-  override def apply(args: Tuple1[String])(using
+  override def apply(input: String)(using
     backend: JsonFileStorage,
     argsStorage: TupleDurableStorage[Tuple1[String], JsonFileStorage],
     resultStorage: DurableStorage[String, JsonFileStorage]
   ): Durable[String] =
     // Event name for this workflow
     given DurableEventName[String] = DurableEventName("continue-signal")
-    val Tuple1(input) = args
     for
       // First activity - will be cached
       step1 <- Durable.activity {
@@ -62,7 +61,7 @@ object ProcessA:
     println(s"[ProcessA] Starting workflow $workflowId with input: $input")
 
     // Create and run workflow
-    val workflow = CrossProcessWorkflow.apply(Tuple1(input))
+    val workflow = CrossProcessWorkflow.apply(input)
     val ctx = RunContext.fresh(workflowId)
 
     val result = Await.result(WorkflowRunner.run(workflow, ctx), 30.seconds)
@@ -138,7 +137,7 @@ object ProcessB:
 
     // Deserialize args and recreate workflow
     val input = readFromString[String](metadata.argsJson)(using JsonFileStorage.given_JsonValueCodec_String)
-    val workflow = function.function.asInstanceOf[DurableFunction[Tuple1[String], String, JsonFileStorage]].apply(Tuple1(input))
+    val workflow = function.function.asInstanceOf[DurableFunction1[String, String, JsonFileStorage]].apply(input)
 
     // Store the event value at the suspend point index
     // This simulates the event being delivered

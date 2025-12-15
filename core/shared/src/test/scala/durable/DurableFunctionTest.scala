@@ -16,39 +16,36 @@ class DurableFunctionTest extends FunSuite:
   given MemoryBackingStore = backing
 
   // Test workflow definitions using unified DurableFunction[Args, R, S]
-  object SimpleWorkflow extends DurableFunction[EmptyTuple, Int, MemoryBackingStore] derives DurableFunctionName:
+  object SimpleWorkflow extends DurableFunction0[Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    override def apply(args: EmptyTuple)(using
+    override def apply()(using
       MemoryBackingStore, TupleDurableStorage[EmptyTuple, MemoryBackingStore], DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] =
       Durable.pure(42)
 
-  object GreetingWorkflow extends DurableFunction[Tuple1[String], String, MemoryBackingStore] derives DurableFunctionName:
+  object GreetingWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    override def apply(args: Tuple1[String])(using
+    override def apply(name: String)(using
       MemoryBackingStore, TupleDurableStorage[Tuple1[String], MemoryBackingStore], DurableStorage[String, MemoryBackingStore]
     ): Durable[String] =
-      val Tuple1(name) = args
       Durable.pure(s"Hello, $name!")
 
-  object AddWorkflow extends DurableFunction[(Int, Int), Int, MemoryBackingStore] derives DurableFunctionName:
+  object AddWorkflow extends DurableFunction2[Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    override def apply(args: (Int, Int))(using
+    override def apply(a: Int, b: Int)(using
       MemoryBackingStore, TupleDurableStorage[(Int, Int), MemoryBackingStore], DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] =
-      val (a, b) = args
       Durable.pure(a + b)
 
-  object SumThreeWorkflow extends DurableFunction[(Int, Int, Int), Int, MemoryBackingStore] derives DurableFunctionName:
+  object SumThreeWorkflow extends DurableFunction3[Int, Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    override def apply(args: (Int, Int, Int))(using
+    override def apply(a: Int, b: Int, c: Int)(using
       MemoryBackingStore, TupleDurableStorage[(Int, Int, Int), MemoryBackingStore], DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] =
-      val (a, b, c) = args
       Durable.pure(a + b + c)
 
   test("DurableFunctionName derived with full package name") {
@@ -85,8 +82,8 @@ class DurableFunctionTest extends FunSuite:
       "durable.DurableFunctionTest.SumThreeWorkflow"
     )
     assert(lookupResult.isDefined)
-    // Can call apply with correct types
-    val durable = lookupResult.get.apply((1, 2, 3))
+    // Can call applyTupled with correct types
+    val durable = lookupResult.get.applyTupled((1, 2, 3))
     assert(durable.isInstanceOf[Durable[Int]])
   }
 
@@ -96,35 +93,35 @@ class DurableFunctionTest extends FunSuite:
   }
 
   test("DurableFunction0 apply returns Durable") {
-    val durable = SimpleWorkflow.apply(EmptyTuple)
+    val durable = SimpleWorkflow.apply()
     durable match
       case Durable.Pure(42) => () // ok
       case _ => fail("Expected Pure(42)")
   }
 
   test("DurableFunction1 apply returns Durable") {
-    val durable = GreetingWorkflow.apply(Tuple1("World"))
+    val durable = GreetingWorkflow.apply("World")
     durable match
       case Durable.Pure("Hello, World!") => () // ok
       case _ => fail("Expected Pure(\"Hello, World!\")")
   }
 
   test("DurableFunction2 apply returns Durable") {
-    val durable = AddWorkflow.apply((10, 32))
+    val durable = AddWorkflow.apply(10, 32)
     durable match
       case Durable.Pure(42) => () // ok
       case _ => fail("Expected Pure(42)")
   }
 
   test("DurableFunction3 apply returns Durable") {
-    val durable = SumThreeWorkflow.apply((10, 20, 12))
+    val durable = SumThreeWorkflow.apply(10, 20, 12)
     durable match
       case Durable.Pure(42) => () // ok
       case _ => fail("Expected Pure(42)")
   }
 
   test("DurableFunction workflow can be run") {
-    val workflow = GreetingWorkflow.apply(Tuple1("Claude"))
+    val workflow = GreetingWorkflow.apply("Claude")
     val ctx = RunContext.fresh(WorkflowId("test-fn-1"))
 
     WorkflowRunner.run(workflow, ctx).map { result =>
@@ -135,19 +132,18 @@ class DurableFunctionTest extends FunSuite:
   test("DurableFunction with activity is cached") {
     var executeCount = 0
 
-    object ActivityWorkflow extends DurableFunction[Tuple1[String], String, MemoryBackingStore] derives DurableFunctionName:
+    object ActivityWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
       override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-      override def apply(args: Tuple1[String])(using
+      override def apply(input: String)(using
         MemoryBackingStore, TupleDurableStorage[Tuple1[String], MemoryBackingStore], DurableStorage[String, MemoryBackingStore]
       ): Durable[String] =
-        val Tuple1(input) = args
         Durable.activity {
           executeCount += 1
           Future.successful(s"Processed: $input")
         }
 
-    val workflow = ActivityWorkflow.apply(Tuple1("test"))
+    val workflow = ActivityWorkflow.apply("test")
     val ctx = RunContext.fresh(WorkflowId("test-fn-2"))
 
     WorkflowRunner.run(workflow, ctx).map { result =>

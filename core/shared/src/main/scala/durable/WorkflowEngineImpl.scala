@@ -51,7 +51,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       record = WorkflowRecord(id, metadata, WorkflowStatus.Running, None, None, now, now)
       _ = state.putActive(id, record)
       // Create and run workflow
-      workflow = function.apply(args)(using storage, argsStorage, resultStorage)
+      workflow = function.applyTupled(args)(using storage, argsStorage, resultStorage)
       // For fresh run: activityOffset = argCount, resumeFromIndex = argCount (nothing to replay)
       _ <- runWorkflow(id, workflow, metadata.activityIndex, metadata.activityIndex, resultStorage)
     yield id

@@ -19,13 +19,12 @@ import scala.concurrent.{Future, ExecutionContext}
  *
  * Example:
  * {{{
- * object PaymentWorkflow extends DurableFunction[Tuple1[String], Payment, MyBackend] derives DurableFunctionName:
+ * object PaymentWorkflow extends DurableFunction1[String, Payment, MyBackend] derives DurableFunctionName:
  *   override val functionName = DurableFunctionName.ofAndRegister(this)
  *
- *   override def apply(args: Tuple1[String])(using
+ *   override def apply(orderId: String)(using
  *     MyBackend, TupleDurableStorage[Tuple1[String], MyBackend], DurableStorage[Payment, MyBackend]
  *   ): Durable[Payment] =
- *     val Tuple1(orderId) = args
  *     for
  *       order <- Durable.activity { fetchOrder(orderId) }
  *       payment <- Durable.activity { processPayment(order) }
@@ -36,8 +35,8 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
   /** Unique name for this function, used for serialization and registry lookup */
   def functionName: String
 
-  /** Apply the function to arguments */
-  def apply(args: Args)(using
+  /** Apply the function to arguments as a tuple */
+  def applyTupled(args: Args)(using
     backend: S,
     argsStorage: TupleDurableStorage[Args, S],
     resultStorage: DurableStorage[R, S]
@@ -62,7 +61,7 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
     ec: ExecutionContext
   ): Future[Option[Durable[R]]] =
     argsStorage.retrieveAll(backend, workflowId, 0).map { argsOpt =>
-      argsOpt.map(args => apply(args)(using backend, argsStorage, resultStorage))
+      argsOpt.map(args => applyTupled(args)(using backend, argsStorage, resultStorage))
     }
 
   /**
@@ -90,13 +89,12 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
    * object CountdownWorkflow extends DurableFunction1[Int, Int, S] derives DurableFunctionName:
    *   override val functionName = DurableFunctionName.ofAndRegister(this)
    *
-   *   def apply(args: Tuple1[Int])(using ...): Durable[Int] = async[Durable] {
-   *     val Tuple1(count) = args
+   *   def apply(count: Int)(using ...): Durable[Int] = async[Durable] {
    *     if count <= 0 then
    *       count
    *     else
    *       await(sleep(1.minute))
-   *       continueWith(Tuple1(count - 1))
+   *       continueWith(count - 1)
    *   }
    * }}}
    */
@@ -105,13 +103,73 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
     argsStorage: TupleDurableStorage[Args, S],
     resultStorage: DurableStorage[R, S]
   ): Durable[R] =
-    Durable.continueAs(functionName, newArgs, apply(newArgs))
+    Durable.continueAs(functionName, newArgs, applyTupled(newArgs))
 
-/** Type aliases for common arities (for convenience) */
-type DurableFunction0[R, S <: DurableStorageBackend] = DurableFunction[EmptyTuple, R, S]
-type DurableFunction1[T1, R, S <: DurableStorageBackend] = DurableFunction[Tuple1[T1], R, S]
-type DurableFunction2[T1, T2, R, S <: DurableStorageBackend] = DurableFunction[(T1, T2), R, S]
-type DurableFunction3[T1, T2, T3, R, S <: DurableStorageBackend] = DurableFunction[(T1, T2, T3), R, S]
+/** Trait for 0-argument durable functions */
+trait DurableFunction0[R, S <: DurableStorageBackend] extends DurableFunction[EmptyTuple, R, S]:
+  /** Apply the function with no arguments */
+  def apply()(using
+    backend: S,
+    argsStorage: TupleDurableStorage[EmptyTuple, S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R]
+
+  override final def applyTupled(args: EmptyTuple)(using
+    backend: S,
+    argsStorage: TupleDurableStorage[EmptyTuple, S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R] = apply()
+
+/** Trait for 1-argument durable functions */
+trait DurableFunction1[T1, R, S <: DurableStorageBackend] extends DurableFunction[Tuple1[T1], R, S]:
+  /** Apply the function with one argument */
+  def apply(arg: T1)(using
+    backend: S,
+    argsStorage: TupleDurableStorage[Tuple1[T1], S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R]
+
+  override final def applyTupled(args: Tuple1[T1])(using
+    backend: S,
+    argsStorage: TupleDurableStorage[Tuple1[T1], S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R] =
+    val Tuple1(arg) = args
+    apply(arg)
+
+/** Trait for 2-argument durable functions */
+trait DurableFunction2[T1, T2, R, S <: DurableStorageBackend] extends DurableFunction[(T1, T2), R, S]:
+  /** Apply the function with two arguments */
+  def apply(arg1: T1, arg2: T2)(using
+    backend: S,
+    argsStorage: TupleDurableStorage[(T1, T2), S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R]
+
+  override final def applyTupled(args: (T1, T2))(using
+    backend: S,
+    argsStorage: TupleDurableStorage[(T1, T2), S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R] =
+    val (arg1, arg2) = args
+    apply(arg1, arg2)
+
+/** Trait for 3-argument durable functions */
+trait DurableFunction3[T1, T2, T3, R, S <: DurableStorageBackend] extends DurableFunction[(T1, T2, T3), R, S]:
+  /** Apply the function with three arguments */
+  def apply(arg1: T1, arg2: T2, arg3: T3)(using
+    backend: S,
+    argsStorage: TupleDurableStorage[(T1, T2, T3), S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R]
+
+  override final def applyTupled(args: (T1, T2, T3))(using
+    backend: S,
+    argsStorage: TupleDurableStorage[(T1, T2, T3), S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R] =
+    val (arg1, arg2, arg3) = args
+    apply(arg1, arg2, arg3)
 
 /**
  * Extension methods for DurableFunction with common arities.

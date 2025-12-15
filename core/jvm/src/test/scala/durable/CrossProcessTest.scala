@@ -113,8 +113,8 @@ class CrossProcessTest extends FunSuite:
 
     try
       // Verify we can cast and call it
-      val function = lookup.get.function.asInstanceOf[DurableFunction[Tuple1[String], String, JsonFileStorage]]
-      val workflow = function.apply(Tuple1("test"))
+      val function = lookup.get.function.asInstanceOf[DurableFunction1[String, String, JsonFileStorage]]
+      val workflow = function.apply("test")
       assert(workflow.isInstanceOf[Durable[String]], "Should return Durable[String]")
     finally
       // Cleanup

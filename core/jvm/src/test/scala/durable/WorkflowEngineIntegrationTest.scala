@@ -87,18 +87,17 @@ object TestEventPayload:
  * Test workflow for engine integration test with custom event type.
  * Uses MemoryWithJsonBackupStorage as concrete backend - allows custom event storage.
  */
-object EngineTestWorkflow extends DurableFunction[Tuple1[String], String, MemoryWithJsonBackupStorage] derives DurableFunctionName:
+object EngineTestWorkflow extends DurableFunction1[String, String, MemoryWithJsonBackupStorage] derives DurableFunctionName:
   import MemoryWithJsonBackupStorage.given
 
   override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-  def apply(args: Tuple1[String])(using
+  def apply(input: String)(using
     backend: MemoryWithJsonBackupStorage,
     argsStorage: TupleDurableStorage[Tuple1[String], MemoryWithJsonBackupStorage],
     resultStorage: DurableStorage[String, MemoryWithJsonBackupStorage]
   ): Durable[String] =
     import TestEventPayload.given
-    val Tuple1(input) = args
     for
       processed <- Durable.activity(Future.successful(s"processed:$input"))
       event <- Durable.awaitEvent[TestEventPayload, MemoryWithJsonBackupStorage]

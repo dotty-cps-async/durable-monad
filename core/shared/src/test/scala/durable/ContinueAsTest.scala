@@ -9,52 +9,49 @@ class ContinueAsTest extends FunSuite:
   // Test workflows using unified DurableFunction[Args, R, S]
   import MemoryBackingStore.given
 
-  object CounterWorkflow extends DurableFunction[Tuple1[Int], Int, MemoryBackingStore] derives DurableFunctionName:
+  object CounterWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply(args: Tuple1[Int])(using
+    def apply(count: Int)(using
       backend: MemoryBackingStore,
       argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
       resultStorage: DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] =
-      val Tuple1(count) = args
       if count <= 0 then
         Durable.pure(count)
       else
         val newCount = count - 1
-        Durable.continueAs(functionName, Tuple1(newCount), apply(Tuple1(newCount)))
+        Durable.continueAs(functionName, Tuple1(newCount), apply(newCount))
 
-  object SwitchWorkflow extends DurableFunction[Tuple1[String], String, MemoryBackingStore] derives DurableFunctionName:
+  object SwitchWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply(args: Tuple1[String])(using
+    def apply(input: String)(using
       backend: MemoryBackingStore,
       argsStorage: TupleDurableStorage[Tuple1[String], MemoryBackingStore],
       resultStorage: DurableStorage[String, MemoryBackingStore]
     ): Durable[String] =
-      val Tuple1(input) = args
       Durable.pure(s"Switched to: $input")
 
-  object TransitionWorkflow extends DurableFunction[Tuple1[Int], String, MemoryBackingStore] derives DurableFunctionName:
+  object TransitionWorkflow extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply(args: Tuple1[Int])(using
+    def apply(n: Int)(using
       backend: MemoryBackingStore,
       argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
       resultStorage: DurableStorage[String, MemoryBackingStore]
     ): Durable[String] =
-      val Tuple1(n) = args
       if n > 0 then
         val newArg = s"from-$n"
         // TupleDurableStorage[Tuple1[String], MemoryBackingStore] is derived automatically from DurableStorage[String, MemoryBackingStore]
-        Durable.continueAs(SwitchWorkflow.functionName, Tuple1(newArg), SwitchWorkflow(Tuple1(newArg)))
+        Durable.continueAs(SwitchWorkflow.functionName, Tuple1(newArg), SwitchWorkflow(newArg))
       else
         Durable.pure("stayed")
 
   test("continueAs returns ContinueAs result") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = CounterWorkflow(Tuple1(3))
+    val workflow = CounterWorkflow(3)
     val ctx = RunContext.fresh(WorkflowId("test-continue-as-1"))
 
     val result = WorkflowRunner.run(workflow, ctx).value.get.get
@@ -71,7 +68,7 @@ class ContinueAsTest extends FunSuite:
   test("continueAs to different workflow") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = TransitionWorkflow(Tuple1(5))
+    val workflow = TransitionWorkflow(5)
     val ctx = RunContext.fresh(WorkflowId("test-transition-1"))
 
     val result = WorkflowRunner.run(workflow, ctx).value.get.get
@@ -87,7 +84,7 @@ class ContinueAsTest extends FunSuite:
   test("storeArgs stores argument correctly") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = CounterWorkflow(Tuple1(5))
+    val workflow = CounterWorkflow(5)
     val workflowId = WorkflowId("test-store-args-1")
     val ctx = RunContext.fresh(workflowId)
 
@@ -107,7 +104,7 @@ class ContinueAsTest extends FunSuite:
   test("workflow completes when count reaches zero") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = CounterWorkflow(Tuple1(0))
+    val workflow = CounterWorkflow(0)
     val ctx = RunContext.fresh(WorkflowId("test-complete-1"))
 
     val result = WorkflowRunner.run(workflow, ctx).value.get.get
@@ -166,12 +163,11 @@ class ContinueAsTest extends FunSuite:
   object CountdownWithPreprocessor extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply(args: Tuple1[Int])(using
+    def apply(count: Int)(using
       backend: MemoryBackingStore,
       argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
       resultStorage: DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] = async[Durable] {
-      val Tuple1(count) = args
       if count <= 0 then
         count
       else
@@ -183,7 +179,7 @@ class ContinueAsTest extends FunSuite:
   test("continueWith with preprocessor - countdown pattern") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = CountdownWithPreprocessor(Tuple1(3))
+    val workflow = CountdownWithPreprocessor(3)
     val ctx = RunContext.fresh(WorkflowId("test-countdown-preprocessor"))
 
     WorkflowRunner.run(workflow, ctx).map { result =>
@@ -199,7 +195,7 @@ class ContinueAsTest extends FunSuite:
   test("continueWith with preprocessor - completes at zero") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = CountdownWithPreprocessor(Tuple1(0))
+    val workflow = CountdownWithPreprocessor(0)
     val ctx = RunContext.fresh(WorkflowId("test-countdown-zero"))
 
     WorkflowRunner.run(workflow, ctx).map { result =>
@@ -218,12 +214,11 @@ class ContinueAsTest extends FunSuite:
   object AccumulatorWorkflow extends DurableFunction2[Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply(args: (Int, Int))(using
+    def apply(count: Int, acc: Int)(using
       backend: MemoryBackingStore,
       argsStorage: TupleDurableStorage[(Int, Int), MemoryBackingStore],
       resultStorage: DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] = async[Durable] {
-      val (count, acc) = args
       if count <= 0 then
         acc
       else
@@ -235,7 +230,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     // Start with (3, 0) - should accumulate 3 + 2 + 1 = 6
-    val workflow = AccumulatorWorkflow((3, 0))
+    val workflow = AccumulatorWorkflow(3, 0)
     val ctx = RunContext.fresh(WorkflowId("test-accumulator"))
 
     WorkflowRunner.run(workflow, ctx).map { result =>
@@ -257,12 +252,11 @@ class ContinueAsTest extends FunSuite:
   object ProcessAndContinue extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply(args: Tuple1[Int])(using
+    def apply(n: Int)(using
       backend: MemoryBackingStore,
       argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
       resultStorage: DurableStorage[String, MemoryBackingStore]
     ): Durable[String] = async[Durable] {
-      val Tuple1(n) = args
       // This activity is cached before continuing
       val processed = s"step-$n"
       if n <= 0 then
@@ -274,7 +268,7 @@ class ContinueAsTest extends FunSuite:
   test("continueWith after activity in preprocessor") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = ProcessAndContinue(Tuple1(2))
+    val workflow = ProcessAndContinue(2)
     val workflowId = WorkflowId("test-process-continue")
     val ctx = RunContext.fresh(workflowId)
 
@@ -294,7 +288,7 @@ class ContinueAsTest extends FunSuite:
   test("continueWith completes when condition is false") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = ProcessAndContinue(Tuple1(0))
+    val workflow = ProcessAndContinue(0)
     val ctx = RunContext.fresh(WorkflowId("test-process-complete"))
 
     WorkflowRunner.run(workflow, ctx).map { result =>
@@ -313,12 +307,11 @@ class ContinueAsTest extends FunSuite:
   object ExplicitTupleWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName: String = DurableFunctionName.ofAndRegister(this)
 
-    def apply(args: Tuple1[Int])(using
+    def apply(n: Int)(using
       backend: MemoryBackingStore,
       argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
       resultStorage: DurableStorage[Int, MemoryBackingStore]
     ): Durable[Int] =
-      val Tuple1(n) = args
       if n <= 0 then Durable.pure(n)
       else
         // Using base method with explicit Tuple1
@@ -327,7 +320,7 @@ class ContinueAsTest extends FunSuite:
   test("continueWith with explicit Tuple syntax") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
-    val workflow = ExplicitTupleWorkflow(Tuple1(2))
+    val workflow = ExplicitTupleWorkflow(2)
     val ctx = RunContext.fresh(WorkflowId("test-explicit-tuple"))
 
     val result = WorkflowRunner.run(workflow, ctx).value.get.get
