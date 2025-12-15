@@ -14,8 +14,8 @@ enum WorkflowResult[+A]:
   /** Workflow suspended, waiting for external input */
   case Suspended[S <: DurableStorageBackend](snapshot: DurableSnapshot, condition: WaitCondition[?, S]) extends WorkflowResult[Nothing]
 
-  /** Workflow failed with an error */
-  case Failed(error: Throwable)
+  /** Workflow failed with an error (always wrapped in ReplayedException for consistent API) */
+  case Failed(error: ReplayedException)
 
   /**
    * Workflow requested to continue as a new workflow.

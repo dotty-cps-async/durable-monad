@@ -58,6 +58,10 @@ class ReplayedException(val stored: StoredFailure)
   /** The stack trace from the original exception (if stored) */
   def originalStackTrace: Option[String] = stored.stackTrace
 
+  /** Check if this ReplayedException wraps an exception of type T */
+  def matches[T <: Throwable](using ct: ClassTag[T]): Boolean =
+    originalClassName == ct.runtimeClass.getName
+
 object ReplayedException:
   /** Create a ReplayedException from a Throwable */
   def apply(e: Throwable): ReplayedException =

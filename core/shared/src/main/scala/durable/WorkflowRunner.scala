@@ -143,9 +143,12 @@ object WorkflowRunner:
       case (Success(value), Nil) =>
         Future.successful(WorkflowResult.Completed(value.asInstanceOf[A]))
 
-      // End of stack with failure - workflow fails
+      // End of stack with failure - workflow fails (wrap in ReplayedException for consistent API)
       case (Failure(error), Nil) =>
-        Future.successful(WorkflowResult.Failed(error))
+        val wrapped = error match
+          case re: ReplayedException => re
+          case e => ReplayedException(e)
+        Future.successful(WorkflowResult.Failed(wrapped))
 
       // Success through normal continuation
       case (Success(value), StackFrame.Cont(f) :: rest) =>

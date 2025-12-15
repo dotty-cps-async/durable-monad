@@ -31,7 +31,7 @@ class FailureReplayTest extends FunSuite:
       // Workflow should fail
       result match
         case WorkflowResult.Failed(e) =>
-          assertEquals(e.getMessage, "test error")
+          assertEquals(e.originalMessage, "test error")
         case other =>
           fail(s"Expected Failed, got $other")
 

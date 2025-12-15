@@ -86,8 +86,8 @@ class TryCatchTest extends FunSuite:
     WorkflowRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowResult.Failed(e) =>
-          assert(e.isInstanceOf[IOException])
-          assertEquals(e.getMessage, "io error")
+          assert(e.matches[IOException])
+          assertEquals(e.originalMessage, "io error")
         case other =>
           fail(s"Expected Failed, got $other")
     }
@@ -152,8 +152,8 @@ class TryCatchTest extends FunSuite:
     WorkflowRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowResult.Failed(e) =>
-          assert(e.isInstanceOf[IllegalStateException])
-          assertEquals(e.getMessage, "in catch")
+          assert(e.matches[IllegalStateException])
+          assertEquals(e.originalMessage, "in catch")
         case other =>
           fail(s"Expected Failed, got $other")
     }

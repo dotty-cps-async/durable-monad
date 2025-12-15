@@ -184,7 +184,7 @@ class WorkflowRunnerRawTest extends FunSuite:
     WorkflowRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowResult.Failed[?]])
       val failed = result.asInstanceOf[WorkflowResult.Failed[Int]]
-      assertEquals(failed.error.getMessage, "test error")
+      assertEquals(failed.error.originalMessage, "test error")
     }
   }
 
