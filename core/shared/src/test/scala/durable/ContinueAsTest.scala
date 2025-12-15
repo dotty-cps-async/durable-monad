@@ -139,7 +139,6 @@ class ContinueAsTest extends FunSuite:
   // ==========================================================================
 
   import cps.*
-  import DurableCpsPreprocessor.given
 
   /**
    * Example: Countdown workflow using continueWith with preprocessor.

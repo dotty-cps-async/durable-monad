@@ -12,7 +12,6 @@ import cps.*
 class DurablePreprocessorTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
-  import DurableCpsPreprocessor.given
   import MemoryBackingStore.given
 
   test("async block with single val") {
@@ -183,7 +182,6 @@ class DurablePreprocessorTest extends FunSuite:
 
     val errors = typeCheckErrors("""
       import durable.*
-      import durable.DurableCpsPreprocessor.given
       import cps.*
 
       // Note: NO given DurableStorageBackend here!
