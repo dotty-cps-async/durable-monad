@@ -53,7 +53,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       // Create and run workflow
       workflow = function.apply(args)(using storage, argsStorage, resultStorage)
       // For fresh run: activityOffset = argCount, resumeFromIndex = argCount (nothing to replay)
-      _ <- runWorkflow(id, workflow, metadata.activityIndex, metadata.activityIndex)
+      _ <- runWorkflow(id, workflow, metadata.activityIndex, metadata.activityIndex, resultStorage)
     yield id
 
   // Run workflow and handle result
@@ -61,7 +61,8 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     workflowId: WorkflowId,
     workflow: Durable[A],
     resumeFromIndex: Int,
-    activityOffset: Int
+    activityOffset: Int,
+    resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
     val ctx = RunContext(workflowId, storage, resumeFromIndex, activityOffset, config.runConfig)
     val runnerFuture = WorkflowRunner.run(workflow, ctx)
@@ -69,7 +70,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
 
     runnerFuture.flatMap {
       case WorkflowResult.Completed(value) =>
-        handleCompleted(workflowId, value)
+        handleCompleted(workflowId, value, resultStorage)
 
       case WorkflowResult.Suspended(snapshot, condition) =>
         handleSuspended(workflowId, snapshot, condition)
@@ -77,17 +78,20 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       case WorkflowResult.Failed(error) =>
         handleFailed(workflowId, error)
 
-      case ca: WorkflowResult.ContinueAs[a] =>
-        handleContinueAs(workflowId, ca)
+      case ca: WorkflowResult.ContinueAs[A] =>
+        handleContinueAs(workflowId, ca, resultStorage)
     }.recover { case e =>
       // Unexpected error in runner
       handleFailed(workflowId, e)
     }.map(_ => ())
 
-  private def handleCompleted(workflowId: WorkflowId, value: Any): Future[Unit] =
+  private def handleCompleted[A](workflowId: WorkflowId, value: A, resultStorage: DurableStorage[A, S]): Future[Unit] =
     state.removeRunner(workflowId)
     state.removeActive(workflowId)
-    storage.updateWorkflowStatus(workflowId, WorkflowStatus.Succeeded)
+    for
+      _ <- resultStorage.storeResult(storage, workflowId, value)
+      _ <- storage.updateWorkflowStatus(workflowId, WorkflowStatus.Succeeded)
+    yield ()
 
   private def handleSuspended(
     workflowId: WorkflowId,
@@ -118,7 +122,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     state.removeActive(workflowId)
     storage.updateWorkflowStatus(workflowId, WorkflowStatus.Failed)
 
-  private def handleContinueAs[A](workflowId: WorkflowId, ca: WorkflowResult.ContinueAs[A]): Future[Unit] =
+  private def handleContinueAs[A](workflowId: WorkflowId, ca: WorkflowResult.ContinueAs[A], resultStorage: DurableStorage[A, S]): Future[Unit] =
     for
       _ <- storage.clear(workflowId)
       _ <- ca.storeArgs(storage, workflowId, ec)
@@ -130,7 +134,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
         updatedAt = Instant.now()
       ))
       // ContinueAs: storage cleared, new args stored, start fresh
-      _ <- runWorkflow(workflowId, ca.workflow(), ca.metadata.activityIndex, ca.metadata.activityIndex)
+      _ <- runWorkflow(workflowId, ca.workflow(), ca.metadata.activityIndex, ca.metadata.activityIndex, resultStorage)
     yield ()
 
   // Register waiter for a condition
@@ -176,7 +180,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       case Some(record) if record.status == WorkflowStatus.Suspended =>
         val wakeTime = Instant.now()
         // Store wake time using typed storage
-        instantStorage.store(storage, workflowId, activityIndex, wakeTime).flatMap { _ =>
+        instantStorage.storeStep(storage, workflowId, activityIndex, wakeTime).flatMap { _ =>
           // Update state and mark for resume
           state.updateActive(workflowId, _.copy(
             metadata = record.metadata.copy(activityIndex = activityIndex + 1),
@@ -209,7 +213,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
         function.recreateFromStorage(workflowId, storage)(using argsStorage, resultStorage, ec).flatMap {
           case Some(workflow) =>
             // Run from resume point
-            runWorkflow(workflowId, workflow, resumeFromIndex, record.metadata.argCount)
+            runWorkflow(workflowId, workflow, resumeFromIndex, record.metadata.argCount, resultStorage)
           case None =>
             Future.failed(new RuntimeException(
               s"Failed to load args for workflow $workflowId (function: ${record.metadata.functionName})"
@@ -247,7 +251,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       val activityIndex = target.metadata.activityIndex
 
       // Store event using typed storage
-      eventStorage.store(storage, target.id, activityIndex, event).flatMap { _ =>
+      eventStorage.storeStep(storage, target.id, activityIndex, event).flatMap { _ =>
         // Update state
         state.updateActive(target.id, _.copy(
           metadata = target.metadata.copy(activityIndex = activityIndex + 1),
@@ -271,8 +275,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
   def queryResult[A](workflowId: WorkflowId)(using resultStorage: DurableStorage[A, S]): Future[Option[A]] =
     queryStatus(workflowId).flatMap {
       case Some(WorkflowStatus.Succeeded) =>
-        // TODO: Implement result retrieval
-        Future.successful(None)
+        resultStorage.retrieveResult(storage, workflowId)
       case _ =>
         Future.successful(None)
     }

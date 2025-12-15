@@ -48,10 +48,13 @@ trait DurableStorageBackend:
 
 // Storage for cached values - parameterized by value type T and backend type S
 trait DurableStorage[T, S <: DurableStorageBackend]:
-  def store(workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit]
-  def storeFailure(workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit]
-  def retrieve(workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]]
-  def backend: S
+  // Step storage (activities, timers, events)
+  def storeStep(backend: S, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit]
+  def storeStepFailure(backend: S, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit]
+  def retrieveStep(backend: S, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]]
+  // Workflow result storage (final result when workflow completes)
+  def storeResult(backend: S, workflowId: WorkflowId, value: T): Future[Unit]
+  def retrieveResult(backend: S, workflowId: WorkflowId): Future[Option[T]]
 
 // The monad itself
 trait Durable[+A] {

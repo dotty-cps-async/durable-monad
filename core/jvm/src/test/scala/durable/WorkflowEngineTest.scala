@@ -182,17 +182,17 @@ class WorkflowEngineTest extends FunSuite:
     val result = for
       workflowId <- engine.start(SimpleWorkflow, Tuple1(42))
       // Check that arg was stored at index 0
-      stored <- storage.forType[Int].retrieve(storage, workflowId, 0)
+      stored <- storage.forType[Int].retrieveStep(storage, workflowId, 0)
     yield stored
 
     val stored = Await.result(result, 5.seconds)
     assertEquals(stored, Some(Right(42)))
   }
 
-  // Tests that require TODO implementations - marked pending
+  // Tests that require additional implementations - marked pending
 
   test("sendEvent wakes suspended workflow".ignore) {
-    // TODO: Requires recreateAndResume implementation
+    // Requires recreateAndResume implementation
     val (storage, engine) = createEngine()
     given MemoryBackingStore = storage
     given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
@@ -214,8 +214,7 @@ class WorkflowEngineTest extends FunSuite:
     assertEquals(status2, Some(WorkflowStatus.Succeeded))
   }
 
-  test("queryResult returns result for completed workflow".ignore) {
-    // TODO: Requires queryResult implementation
+  test("queryResult returns result for completed workflow") {
     val (storage, engine) = createEngine()
     given MemoryBackingStore = storage
     given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
@@ -233,8 +232,7 @@ class WorkflowEngineTest extends FunSuite:
     assertEquals(queryResult, Some(42))  // 21 * 2
   }
 
-  test("queryResult returns None for pending workflow".ignore) {
-    // TODO: Requires queryResult implementation
+  test("queryResult returns None for pending workflow") {
     val (storage, engine) = createEngine()
     given MemoryBackingStore = storage
     given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
@@ -251,7 +249,7 @@ class WorkflowEngineTest extends FunSuite:
   }
 
   test("recover restores suspended workflows".ignore) {
-    // TODO: Requires full implementation
+    // Requires full recover implementation
     val storage = MemoryBackingStore()
     given MemoryBackingStore = storage
     given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]

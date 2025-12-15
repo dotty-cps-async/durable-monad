@@ -218,7 +218,7 @@ object WorkflowRunner:
 
     if state.isReplayingAt(index) then
       // Replaying - retrieve from cache (success or failure)
-      storage.retrieve(backend, ctx.workflowId, index).flatMap {
+      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
         case Some(Right(cached)) =>
           // Cached success
           continueWith(Success(cached), ctx, state, stack)
@@ -237,12 +237,12 @@ object WorkflowRunner:
       executeWithRetry(compute, policy, ctx, index).transformWith {
         case Success(result) =>
           // Store success - if storage fails, fail workflow (no retry on storage)
-          storage.store(backend, ctx.workflowId, index, result).flatMap { _ =>
+          storage.storeStep(backend, ctx.workflowId, index, result).flatMap { _ =>
             continueWith(Success(result), ctx, state, stack)
           }
         case Failure(e) =>
           // Store failure for deterministic replay
-          storage.storeFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)).flatMap { _ =>
+          storage.storeStepFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)).flatMap { _ =>
             continueWith(Failure(e), ctx, state, stack)
           }
       }.recoverWith { case e =>
@@ -272,7 +272,7 @@ object WorkflowRunner:
 
     if state.isReplayingAt(index) then
       // Replaying - retrieve event value from cache
-      storage.retrieve(backend, ctx.workflowId, index).flatMap {
+      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
         case Some(Right(cached)) =>
           // Cached event value - continue with it
           continueWith(Success(cached), ctx, state, stack)

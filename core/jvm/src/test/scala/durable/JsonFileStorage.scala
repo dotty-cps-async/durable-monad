@@ -128,26 +128,43 @@ object JsonFileStorage:
     private def activityFile(backend: JsonFileStorage, workflowId: WorkflowId, index: Int): Path =
       workflowDir(backend, workflowId).resolve(s"activity-$index.json")
 
-    def store(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
+    private def resultFile(backend: JsonFileStorage, workflowId: WorkflowId): Path =
+      workflowDir(backend, workflowId).resolve("result.json")
+
+    def storeStep(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
       val file = activityFile(backend, workflowId, activityIndex)
       Files.createDirectories(file.getParent)
       val wrapped = StoredValue[T](Right(value))
       Files.writeString(file, writeToString(wrapped), StandardCharsets.UTF_8)
       Future.successful(())
 
-    def storeFailure(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
+    def storeStepFailure(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
       val file = activityFile(backend, workflowId, activityIndex)
       Files.createDirectories(file.getParent)
       val wrapped = StoredValue[T](Left(failure))
       Files.writeString(file, writeToString(wrapped), StandardCharsets.UTF_8)
       Future.successful(())
 
-    def retrieve(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
+    def retrieveStep(backend: JsonFileStorage, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
       val file = activityFile(backend, workflowId, activityIndex)
       if Files.exists(file) then
         val json = Files.readString(file, StandardCharsets.UTF_8)
         val wrapped = readFromString[StoredValue[T]](json)
         Future.successful(Some(wrapped.value))
+      else
+        Future.successful(None)
+
+    def storeResult(backend: JsonFileStorage, workflowId: WorkflowId, value: T): Future[Unit] =
+      val file = resultFile(backend, workflowId)
+      Files.createDirectories(file.getParent)
+      Files.writeString(file, writeToString(value), StandardCharsets.UTF_8)
+      Future.successful(())
+
+    def retrieveResult(backend: JsonFileStorage, workflowId: WorkflowId): Future[Option[T]] =
+      val file = resultFile(backend, workflowId)
+      if Files.exists(file) then
+        val json = Files.readString(file, StandardCharsets.UTF_8)
+        Future.successful(Some(readFromString[T](json)))
       else
         Future.successful(None)
 

@@ -26,7 +26,9 @@ class MemoryBackingStore(
   // Workflow records storage
   private val workflowRecords: mutable.Map[WorkflowId, WorkflowRecord],
   // Pending events storage
-  private val pendingEvents: mutable.Map[String, mutable.ArrayBuffer[PendingEvent[Any]]]
+  private val pendingEvents: mutable.Map[String, mutable.ArrayBuffer[PendingEvent[Any]]],
+  // Workflow result storage - package private for typeclass access
+  private[durable] val resultStore: mutable.Map[WorkflowId, Any]
 ) extends DurableStorageBackend:
 
   // DurableStorageBackend: activity storage
@@ -35,6 +37,7 @@ class MemoryBackingStore(
   def clear(workflowId: WorkflowId): Future[Unit] =
     activityStore.keys.filter(_._1 == workflowId).foreach(activityStore.remove)
     workflowRecords.remove(workflowId)
+    resultStore.remove(workflowId)
     Future.successful(())
 
   // DurableStorageBackend: workflow metadata
@@ -123,6 +126,7 @@ class MemoryBackingStore(
     activityStore.clear()
     workflowRecords.clear()
     pendingEvents.clear()
+    resultStore.clear()
 
   def size: Int = activityStore.size
 
@@ -139,15 +143,23 @@ object MemoryBackingStore extends MemoryBackingStorePlatform:
    * Backend is passed as parameter to methods.
    */
   given [T]: DurableStorage[T, MemoryBackingStore] with
-    def store(backend: MemoryBackingStore, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
+    def storeStep(backend: MemoryBackingStore, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
       backend.activityStore.put((workflowId, activityIndex), Right(value))
       Future.successful(())
 
-    def storeFailure(backend: MemoryBackingStore, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
+    def storeStepFailure(backend: MemoryBackingStore, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
       backend.activityStore.put((workflowId, activityIndex), Left(failure))
       Future.successful(())
 
-    def retrieve(backend: MemoryBackingStore, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
+    def retrieveStep(backend: MemoryBackingStore, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
       val result = backend.activityStore.get((workflowId, activityIndex))
         .map(_.map(_.asInstanceOf[T]))
+      Future.successful(result)
+
+    def storeResult(backend: MemoryBackingStore, workflowId: WorkflowId, value: T): Future[Unit] =
+      backend.resultStore.put(workflowId, value)
+      Future.successful(())
+
+    def retrieveResult(backend: MemoryBackingStore, workflowId: WorkflowId): Future[Option[T]] =
+      val result = backend.resultStore.get(workflowId).map(_.asInstanceOf[T])
       Future.successful(result)

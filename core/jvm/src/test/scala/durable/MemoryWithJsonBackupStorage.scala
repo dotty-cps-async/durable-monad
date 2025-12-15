@@ -40,12 +40,17 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
   // Pending events: eventName -> list of events
   private val pendingEvents = TrieMap.empty[String, mutable.ArrayBuffer[StoredPendingEvent]]
 
+  // Workflow results: workflowId -> serialized result
+  // Package private for typeclass access
+  private[durable] val results = TrieMap.empty[String, String]
+
   // DurableStorageBackend implementation
 
   def clear(workflowId: WorkflowId): Future[Unit] =
     val wfId = workflowId.value
     activities.keys.filter(_._1 == wfId).foreach(activities.remove)
     workflows.remove(wfId)
+    results.remove(wfId)
     Future.successful(())
 
   def saveWorkflowMetadata(workflowId: WorkflowId, metadata: WorkflowMetadata, status: WorkflowStatus): Future[Unit] =
@@ -243,17 +248,17 @@ object MemoryWithJsonBackupStorage:
    * Requires JsonValueCodec[T] for serialization.
    */
   given [T: JsonValueCodec]: DurableStorage[T, MemoryWithJsonBackupStorage] with
-    def store(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
+    def storeStep(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit] =
       val json = writeToString(StoredActivity(Right(writeToString(value)), summon[JsonValueCodec[T]].getClass.getName))
       backend.activities.put((workflowId.value, activityIndex), json)
       Future.successful(())
 
-    def storeFailure(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
+    def storeStepFailure(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit] =
       val json = writeToString(StoredActivity(Left(failure), ""))
       backend.activities.put((workflowId.value, activityIndex), json)
       Future.successful(())
 
-    def retrieve(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
+    def retrieveStep(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]] =
       backend.activities.get((workflowId.value, activityIndex)) match
         case Some(json) =>
           val stored = readFromString[StoredActivity](json)
@@ -263,6 +268,15 @@ object MemoryWithJsonBackupStorage:
           Future.successful(Some(result))
         case None =>
           Future.successful(None)
+
+    def storeResult(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId, value: T): Future[Unit] =
+      backend.results.put(workflowId.value, writeToString(value))
+      Future.successful(())
+
+    def retrieveResult(backend: MemoryWithJsonBackupStorage, workflowId: WorkflowId): Future[Option[T]] =
+      backend.results.get(workflowId.value) match
+        case Some(json) => Future.successful(Some(readFromString[T](json)))
+        case None => Future.successful(None)
 
 // Storage data types
 

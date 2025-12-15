@@ -144,7 +144,7 @@ object ProcessB:
     // This simulates the event being delivered
     println(s"[ProcessB] Storing event value '$eventValue' at index ${metadata.activityIndex}")
     Await.result(
-      storage.forType[String].store(storage, workflowId, metadata.activityIndex, eventValue),
+      storage.forType[String].storeStep(storage, workflowId, metadata.activityIndex, eventValue),
       5.seconds
     )
 

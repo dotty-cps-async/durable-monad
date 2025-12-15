@@ -11,5 +11,6 @@ trait MemoryBackingStorePlatform:
     new MemoryBackingStore(
       activityStore = TrieMap.empty[(WorkflowId, Int), Either[StoredFailure, Any]],
       workflowRecords = TrieMap.empty[WorkflowId, WorkflowRecord],
-      pendingEvents = TrieMap.empty[String, mutable.ArrayBuffer[PendingEvent[Any]]]
+      pendingEvents = TrieMap.empty[String, mutable.ArrayBuffer[PendingEvent[Any]]],
+      resultStore = TrieMap.empty[WorkflowId, Any]
     )

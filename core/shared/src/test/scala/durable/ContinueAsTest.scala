@@ -103,7 +103,7 @@ class ContinueAsTest extends FunSuite:
         case WorkflowResult.ContinueAs(_, storeArgs, _) =>
           for
             _ <- storeArgs(backing, workflowId, global)
-            stored <- backing.forType[Int].retrieve(backing, workflowId, 0)
+            stored <- backing.forType[Int].retrieveStep(backing, workflowId, 0)
           yield assertEquals(stored, Some(Right(4))) // 5 - 1 = 4
         case other =>
           Future.failed(AssertionError(s"Expected ContinueAs, got $other"))
@@ -154,8 +154,8 @@ class ContinueAsTest extends FunSuite:
 
     for
       _ <- tupleStorage.storeAll(backing, workflowId, 0, ("hello", 42))
-      storedString <- backing.forType[String].retrieve(backing, workflowId, 0)
-      storedInt <- backing.forType[Int].retrieve(backing, workflowId, 1)
+      storedString <- backing.forType[String].retrieveStep(backing, workflowId, 0)
+      storedInt <- backing.forType[Int].retrieveStep(backing, workflowId, 1)
     yield
       assertEquals(storedString, Some(Right("hello")))
       assertEquals(storedInt, Some(Right(42)))

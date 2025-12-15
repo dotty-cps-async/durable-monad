@@ -69,20 +69,26 @@ trait DurableStorageBackend:
  * will return the same failure (as ReplayedException).
  */
 trait DurableStorage[T, S <: DurableStorageBackend]:
-  /** Store a successful result */
-  def store(backend: S, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit]
+  /** Store a successful step result (activity/timer/event) */
+  def storeStep(backend: S, workflowId: WorkflowId, activityIndex: Int, value: T): Future[Unit]
 
-  /** Store a failure result as StoredFailure (easily serializable) */
-  def storeFailure(backend: S, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit]
+  /** Store a step failure as StoredFailure (easily serializable) */
+  def storeStepFailure(backend: S, workflowId: WorkflowId, activityIndex: Int, failure: StoredFailure): Future[Unit]
 
   /**
-   * Retrieve cached result.
+   * Retrieve cached step result.
    * Returns:
    *   - None if not cached
    *   - Some(Left(failure)) if failure was cached
    *   - Some(Right(value)) if success was cached
    */
-  def retrieve(backend: S, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]]
+  def retrieveStep(backend: S, workflowId: WorkflowId, activityIndex: Int): Future[Option[Either[StoredFailure, T]]]
+
+  /** Store workflow final result (when workflow completes successfully) */
+  def storeResult(backend: S, workflowId: WorkflowId, value: T): Future[Unit]
+
+  /** Retrieve workflow final result */
+  def retrieveResult(backend: S, workflowId: WorkflowId): Future[Option[T]]
 
 object DurableStorage:
   def apply[T, S <: DurableStorageBackend](using storage: DurableStorage[T, S]): DurableStorage[T, S] = storage

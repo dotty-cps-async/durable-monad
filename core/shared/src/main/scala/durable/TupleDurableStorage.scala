@@ -44,12 +44,12 @@ object TupleDurableStorage:
     def storeAll(backend: S, workflowId: WorkflowId, startIndex: Int, args: H *: T)(using ExecutionContext): Future[Unit] =
       val head *: tail = args
       for
-        _ <- headStorage.store(backend, workflowId, startIndex, head)
+        _ <- headStorage.storeStep(backend, workflowId, startIndex, head)
         _ <- tailStorage.storeAll(backend, workflowId, startIndex + 1, tail)
       yield ()
     def retrieveAll(backend: S, workflowId: WorkflowId, startIndex: Int)(using ExecutionContext): Future[Option[H *: T]] =
       for
-        headOpt <- headStorage.retrieve(backend, workflowId, startIndex)
+        headOpt <- headStorage.retrieveStep(backend, workflowId, startIndex)
         tailOpt <- tailStorage.retrieveAll(backend, workflowId, startIndex + 1)
       yield
         for

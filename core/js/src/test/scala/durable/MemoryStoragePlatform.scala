@@ -10,5 +10,6 @@ trait MemoryBackingStorePlatform:
     new MemoryBackingStore(
       activityStore = mutable.HashMap.empty[(WorkflowId, Int), Either[StoredFailure, Any]],
       workflowRecords = mutable.HashMap.empty[WorkflowId, WorkflowRecord],
-      pendingEvents = mutable.HashMap.empty[String, mutable.ArrayBuffer[PendingEvent[Any]]]
+      pendingEvents = mutable.HashMap.empty[String, mutable.ArrayBuffer[PendingEvent[Any]]],
+      resultStore = mutable.HashMap.empty[WorkflowId, Any]
     )
