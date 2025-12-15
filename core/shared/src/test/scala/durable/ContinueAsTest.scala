@@ -52,9 +52,7 @@ class ContinueAsTest extends FunSuite:
         Durable.pure("stayed")
 
   test("continueAs returns ContinueAs result") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = CounterWorkflow(Tuple1(3))
     val ctx = RunContext.fresh(WorkflowId("test-continue-as-1"))
@@ -71,9 +69,7 @@ class ContinueAsTest extends FunSuite:
   }
 
   test("continueAs to different workflow") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = TransitionWorkflow(Tuple1(5))
     val ctx = RunContext.fresh(WorkflowId("test-transition-1"))
@@ -89,9 +85,7 @@ class ContinueAsTest extends FunSuite:
   }
 
   test("storeArgs stores argument correctly") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = CounterWorkflow(Tuple1(5))
     val workflowId = WorkflowId("test-store-args-1")
@@ -111,9 +105,7 @@ class ContinueAsTest extends FunSuite:
   }
 
   test("workflow completes when count reaches zero") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = CounterWorkflow(Tuple1(0))
     val ctx = RunContext.fresh(WorkflowId("test-complete-1"))
@@ -145,9 +137,7 @@ class ContinueAsTest extends FunSuite:
   }
 
   test("TupleDurableStorage stores tuple elements") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     val tupleStorage = summon[TupleDurableStorage[(String, Int), MemoryBackingStore]]
     val workflowId = WorkflowId("test-tuple-storage")
@@ -159,4 +149,192 @@ class ContinueAsTest extends FunSuite:
     yield
       assertEquals(storedString, Some(Right("hello")))
       assertEquals(storedInt, Some(Right(42)))
+  }
+
+  // ==========================================================================
+  // Tests for continueWith helper method and preprocessor integration
+  // ==========================================================================
+
+  import cps.*
+  import DurableCpsPreprocessor.given
+  import DurableFunctionSyntax.*
+
+  /**
+   * Example: Countdown workflow using continueWith with preprocessor.
+   * Each iteration is a new workflow run, preventing unbounded history growth.
+   */
+  object CountdownWithPreprocessor extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+
+    def apply(args: Tuple1[Int])(using
+      backend: MemoryBackingStore,
+      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
+      resultStorage: DurableStorage[Int, MemoryBackingStore]
+    ): Durable[Int] = async[Durable] {
+      val Tuple1(count) = args
+      if count <= 0 then
+        count
+      else
+        // Using extension syntax - no Tuple1 wrapping needed
+        // await is required because continueWith returns Durable[R]
+        await(continueWith(count - 1))
+    }
+
+  test("continueWith with preprocessor - countdown pattern") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = CountdownWithPreprocessor(Tuple1(3))
+    val ctx = RunContext.fresh(WorkflowId("test-countdown-preprocessor"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.ContinueAs(metadata, _, _) =>
+          assertEquals(metadata.functionName, "durable.ContinueAsTest.CountdownWithPreprocessor")
+          assertEquals(metadata.argCount, 1)
+        case other =>
+          fail(s"Expected ContinueAs, got $other")
+    }
+  }
+
+  test("continueWith with preprocessor - completes at zero") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = CountdownWithPreprocessor(Tuple1(0))
+    val ctx = RunContext.fresh(WorkflowId("test-countdown-zero"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.Completed(value) =>
+          assertEquals(value, 0)
+        case other =>
+          fail(s"Expected Completed(0), got $other")
+    }
+  }
+
+  /**
+   * Example: Accumulator workflow - demonstrates loop with state.
+   * Sums numbers from n down to 0 using continueWith.
+   */
+  object AccumulatorWorkflow extends DurableFunction2[Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+
+    def apply(args: (Int, Int))(using
+      backend: MemoryBackingStore,
+      argsStorage: TupleDurableStorage[(Int, Int), MemoryBackingStore],
+      resultStorage: DurableStorage[Int, MemoryBackingStore]
+    ): Durable[Int] = async[Durable] {
+      val (count, acc) = args
+      if count <= 0 then
+        acc
+      else
+        // Using extension syntax for 2 args
+        await(continueWith(count - 1, acc + count))
+    }
+
+  test("continueWith with loop accumulator pattern") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    // Start with (3, 0) - should accumulate 3 + 2 + 1 = 6
+    val workflow = AccumulatorWorkflow((3, 0))
+    val ctx = RunContext.fresh(WorkflowId("test-accumulator"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.ContinueAs(metadata, _, nextWorkflow) =>
+          assertEquals(metadata.functionName, "durable.ContinueAsTest.AccumulatorWorkflow")
+          assertEquals(metadata.argCount, 2)
+          // nextWorkflow() should return the next iteration
+          assert(nextWorkflow().isInstanceOf[Durable[?]])
+        case other =>
+          fail(s"Expected ContinueAs, got $other")
+    }
+  }
+
+  /**
+   * Example: Workflow with activity before continueWith.
+   * Shows that activities are cached before the loop continues.
+   */
+  object ProcessAndContinue extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+
+    def apply(args: Tuple1[Int])(using
+      backend: MemoryBackingStore,
+      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
+      resultStorage: DurableStorage[String, MemoryBackingStore]
+    ): Durable[String] = async[Durable] {
+      val Tuple1(n) = args
+      // This activity is cached before continuing
+      val processed = s"step-$n"
+      if n <= 0 then
+        processed
+      else
+        await(continueWith(n - 1))
+    }
+
+  test("continueWith after activity in preprocessor") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = ProcessAndContinue(Tuple1(2))
+    val workflowId = WorkflowId("test-process-continue")
+    val ctx = RunContext.fresh(workflowId)
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.ContinueAs(metadata, storeArgs, _) =>
+          // Verify activities were cached (preprocessor wraps multiple vals)
+          // Expected: args extraction, processed string, condition
+          assert(backing.size > 0, "Expected some activities to be cached")
+          // Verify ContinueAs has correct metadata
+          assertEquals(metadata.argCount, 1)
+        case other =>
+          fail(s"Expected ContinueAs, got $other")
+    }
+  }
+
+  test("continueWith completes when condition is false") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = ProcessAndContinue(Tuple1(0))
+    val ctx = RunContext.fresh(WorkflowId("test-process-complete"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.Completed(value) =>
+          assertEquals(value, "step-0")
+        case other =>
+          fail(s"Expected Completed, got $other")
+    }
+  }
+
+  /**
+   * Example: Using base continueWith with explicit Tuple.
+   * Shows the non-extension syntax.
+   */
+  object ExplicitTupleWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+
+    def apply(args: Tuple1[Int])(using
+      backend: MemoryBackingStore,
+      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
+      resultStorage: DurableStorage[Int, MemoryBackingStore]
+    ): Durable[Int] =
+      val Tuple1(n) = args
+      if n <= 0 then Durable.pure(n)
+      else
+        // Using base method with explicit Tuple1
+        this.continueWith(Tuple1(n - 1))
+
+  test("continueWith with explicit Tuple syntax") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = ExplicitTupleWorkflow(Tuple1(2))
+    val ctx = RunContext.fresh(WorkflowId("test-explicit-tuple"))
+
+    val result = WorkflowRunner.run(workflow, ctx).value.get.get
+
+    result match
+      case WorkflowResult.ContinueAs(metadata, _, _) =>
+        assertEquals(metadata.functionName, "durable.ContinueAsTest.ExplicitTupleWorkflow")
+      case other =>
+        fail(s"Expected ContinueAs, got $other")
   }

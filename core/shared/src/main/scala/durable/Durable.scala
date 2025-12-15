@@ -18,9 +18,8 @@ import cps.*
  * The runner (interpreter) handles execution, async operations, and storage.
  *
  * Usage with async/await:
+ *   import MemoryBackingStore.given
  *   given backing: MemoryBackingStore = MemoryBackingStore()
- *   given DurableStorageBackend = backing
- *   given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
  *   async[Durable] {
  *     val a = await(activity1)
  *     await(sleep(1.hour))        // suspends here

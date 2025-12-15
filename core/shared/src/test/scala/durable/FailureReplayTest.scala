@@ -13,14 +13,13 @@ import durable.runtime.Scheduler
 class FailureReplayTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
+  import MemoryBackingStore.given
 
   // Use immediate scheduler for fast tests
   val testConfig = RunConfig(scheduler = Scheduler.immediate)
 
   test("failure is stored in cache") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = Durable.activity(
       Future.failed(RuntimeException("test error")),
@@ -49,9 +48,7 @@ class FailureReplayTest extends FunSuite:
   }
 
   test("replayed failure becomes ReplayedException") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     // Pre-populate cache with a failure
     val storedFailure = StoredFailure("java.lang.RuntimeException", "replayed error")
@@ -107,9 +104,7 @@ class FailureReplayTest extends FunSuite:
   }
 
   test("failure replay with manual catch handling") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     // Pre-populate cache with a failure
     val storedFailure = StoredFailure("java.lang.RuntimeException", "handled error")
@@ -150,9 +145,7 @@ class FailureReplayTest extends FunSuite:
   }
 
   test("preprocessor transforms catch to handle ReplayedException") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var shouldFail = true
     val workflow = async[Durable] {
@@ -181,9 +174,7 @@ class FailureReplayTest extends FunSuite:
   }
 
   test("catch handler using exception is cached and replayed correctly") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var shouldFail = true
     var capturedMessage: String = ""
@@ -225,9 +216,7 @@ class FailureReplayTest extends FunSuite:
   }
 
   test("failure and success in sequence - failure is replayed correctly") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     // Pre-populate: index 0 = success, index 1 = failure
     backing.put(WorkflowId("seq-1"), 0, Right(10))

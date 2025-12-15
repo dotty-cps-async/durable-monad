@@ -13,11 +13,10 @@ class DurablePreprocessorTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import DurableCpsPreprocessor.given
+  import MemoryBackingStore.given
 
   test("async block with single val") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("preprocess-1"))
 
     var computeCount = 0
@@ -37,9 +36,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block with multiple vals") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("preprocess-2"))
 
     var computeCount = 0
@@ -58,9 +55,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block replays from cache") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("preprocess-3")
 
     // First run - compute and cache
@@ -87,9 +82,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block with if expression") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("preprocess-4"))
 
     var condCount = 0
@@ -116,9 +109,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block with nested block") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("preprocess-5"))
 
     var outerCount = 0
@@ -142,9 +133,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("async block with match expression") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("preprocess-6"))
 
     var scrutineeCount = 0
@@ -168,9 +157,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("preprocessor captures DurableStorage in Activity") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     // Create a workflow via async - the preprocessor should capture DurableStorage
     val workflow = async[Durable] {
@@ -213,9 +200,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("non-deterministic condition in if is cached and replayed") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("preprocess-nondet")
 
     // Simulate non-deterministic condition with a counter
@@ -266,9 +251,7 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   test("non-deterministic scrutinee in match is cached and replayed") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("preprocess-match-nondet")
 
     // Simulate non-deterministic scrutinee with a counter

@@ -12,14 +12,13 @@ import durable.runtime.Scheduler
 class ActivityRetryTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
+  import MemoryBackingStore.given
 
   // Use immediate scheduler for fast tests
   val testConfig = RunConfig(scheduler = Scheduler.immediate)
 
   test("activity succeeds on first attempt - no retry needed") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var attemptCount = 0
     val workflow = Durable.activity {
@@ -35,9 +34,7 @@ class ActivityRetryTest extends FunSuite:
   }
 
   test("activity succeeds after transient failures") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var attemptCount = 0
     val workflow = Durable.activity(
@@ -59,9 +56,7 @@ class ActivityRetryTest extends FunSuite:
   }
 
   test("activity fails after max retries exhausted") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var attemptCount = 0
     val workflow = Durable.activity(
@@ -90,9 +85,7 @@ class ActivityRetryTest extends FunSuite:
   }
 
   test("non-recoverable error fails immediately without retry") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var attemptCount = 0
     val events = scala.collection.mutable.ListBuffer[RetryEvent]()
@@ -125,9 +118,7 @@ class ActivityRetryTest extends FunSuite:
   }
 
   test("custom isRecoverable predicate is respected") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var attemptCount = 0
     // Only retry IllegalArgumentException
@@ -155,9 +146,7 @@ class ActivityRetryTest extends FunSuite:
   }
 
   test("retry logger receives events") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var attemptCount = 0
     val events = scala.collection.mutable.ListBuffer[RetryEvent]()
@@ -190,9 +179,7 @@ class ActivityRetryTest extends FunSuite:
   }
 
   test("replay skips retry logic") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     // Pre-populate cache
     backing.put(WorkflowId("retry-test-7"), 0, Right(42))
@@ -215,9 +202,7 @@ class ActivityRetryTest extends FunSuite:
   }
 
   test("RetryPolicy.noRetry fails immediately") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
 
     var attemptCount = 0
     val workflow = Durable.activity(

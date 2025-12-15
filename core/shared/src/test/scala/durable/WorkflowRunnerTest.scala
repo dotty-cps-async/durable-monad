@@ -10,13 +10,12 @@ import munit.FunSuite
 class WorkflowRunnerTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
+  import MemoryBackingStore.given
 
   // Helper to run tests with isolated storage
-  def withStorage[A](f: (MemoryBackingStore, DurableStorage[Any, MemoryBackingStore]) ?=> A): A =
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
-    f(using backing, backing.forType[Any])
+  def withStorage[A](f: MemoryBackingStore ?=> A): A =
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    f
 
   test("run pure value") {
     withStorage {
@@ -75,9 +74,7 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run activity - executes and caches") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("test-5"))
 
     var executeCount = 0
@@ -94,9 +91,7 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run activity - replays from cache") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     // Pre-populate cache at index 0
     backing.put(WorkflowId("test-6"), 0, Right(42))
 
@@ -116,9 +111,7 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run suspend") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     given DurableEventName[String] = DurableEventName("waiting for signal")
     val ctx = RunContext.fresh(WorkflowId("test-7"))
 
@@ -156,9 +149,7 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run multiple activities in sequence") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("test-9"))
 
     var executeCount = 0
@@ -176,9 +167,7 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("run replay from middle") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("test-10")
 
     // Pre-populate cache with first two values (indices 0 and 1)
@@ -217,9 +206,7 @@ class WorkflowRunnerTest extends FunSuite:
   }
 
   test("activity result is cached") {
-    val backing = MemoryBackingStore()
-    given MemoryBackingStore = backing
-    given [T]: DurableStorage[T, MemoryBackingStore] = backing.forType[T]
+    given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("test-12"))
 
     var callCount = 0

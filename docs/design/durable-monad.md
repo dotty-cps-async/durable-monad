@@ -171,10 +171,23 @@ async[Durable] {
 
 ### Q1: Loops
 
-**Decision**: Recursion and combinators only, no `var`
+**Decision**: Recursion, `continueWith`, and combinators only, no `var`
 
 ```scala
-// Use recursion
+// Option 1: Use continueWith for long-running loops (recommended)
+// Each iteration clears history, preventing unbounded growth
+object ProcessItemsWorkflow extends DurableFunction2[List[Item], List[Result], List[Result], S]:
+  def apply(args: (List[Item], List[Result]))(using ...): Durable[List[Result]] = async[Durable] {
+    val (items, acc) = args
+    items match
+      case Nil => acc
+      case h :: t =>
+        val r = process(h)         // cached
+        await(sleep(1.minute))     // suspension
+        await(continueWith(t, acc :+ r))  // continue with remaining items
+  }
+
+// Option 2: Simple recursion (for bounded iteration within single workflow)
 def processItems(items: List[Item], acc: List[Result]): Durable[List[Result]] =
   items match {
     case Nil => Durable.pure(acc)
@@ -184,9 +197,13 @@ def processItems(items: List[Item], acc: List[Result]): Durable[List[Result]] =
       processItems(t, acc :+ r)    // recurse
   }
 
-// Or combinators
+// Option 3: Combinators
 Durable.traverse(list)(item => process(item))
 ```
+
+**When to use `continueWith` vs recursion:**
+- `continueWith`: Long-running loops, many iterations, or when history growth is a concern
+- Recursion: Short-lived loops, bounded iteration count
 
 ### Q2: Branch Handling
 
@@ -733,6 +750,64 @@ object PaymentWorkflow extends DurableFunction[Tuple1[String], Payment, MyBacken
       order <- Durable.activity { fetchOrder(orderId) }
       payment <- Durable.activity { processPayment(order) }
     yield payment
+```
+
+### ContinueWith - Loop Patterns
+
+Durable workflows don't support mutable variables (`var`). For loops, use `continueWith` which:
+- Clears the activity history (prevents unbounded growth)
+- Stores new arguments
+- Restarts the workflow with new state
+
+Each iteration becomes a new workflow run, making it safe for long-running loops.
+
+**Using continueWith with the preprocessor:**
+
+```scala
+import DurableFunctionSyntax.*  // for cleaner single-arg syntax
+
+object CountdownWorkflow extends DurableFunction1[Int, Int, MyBackend] derives DurableFunctionName:
+  override val functionName = DurableFunctionName.ofAndRegister(this)
+
+  def apply(args: Tuple1[Int])(using ...): Durable[Int] = async[Durable] {
+    val Tuple1(count) = args
+    if count <= 0 then
+      count  // base case - return result
+    else
+      // Continue with new count - await because continueWith returns Durable[R]
+      await(continueWith(count - 1))
+  }
+```
+
+**Accumulator pattern (loop with state):**
+
+```scala
+object SumWorkflow extends DurableFunction2[Int, Int, Int, MyBackend] derives DurableFunctionName:
+  override val functionName = DurableFunctionName.ofAndRegister(this)
+
+  def apply(args: (Int, Int))(using ...): Durable[Int] = async[Durable] {
+    val (count, acc) = args
+    if count <= 0 then
+      acc  // return accumulated result
+    else
+      await(continueWith(count - 1, acc + count))  // extension syntax for 2 args
+  }
+```
+
+**Syntax options:**
+
+```scala
+// 1. Extension syntax (import DurableFunctionSyntax.*) - no Tuple wrapping
+await(continueWith(arg1))              // DurableFunction1
+await(continueWith(arg1, arg2))        // DurableFunction2
+await(continueWith(arg1, arg2, arg3))  // DurableFunction3
+
+// 2. Base method - explicit Tuple wrapping
+await(this.continueWith(Tuple1(arg1)))
+await(this.continueWith((arg1, arg2)))
+
+// 3. Raw API - when switching to different workflow
+await(Durable.continueAs(otherWorkflow.functionName, Tuple1(arg), otherWorkflow(Tuple1(arg))))
 ```
 
 ### Registry

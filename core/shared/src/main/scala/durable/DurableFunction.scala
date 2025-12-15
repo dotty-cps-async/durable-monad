@@ -77,8 +77,88 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
     val record = FunctionRecord(this, argsStorage, resultStorage)
     DurableFunctionRegistry.global.register(name, record)
 
+  /**
+   * Continue as a new invocation of this workflow with new arguments.
+   * Clears activity storage and restarts with the new args.
+   *
+   * This is the recommended pattern for loops in durable workflows:
+   * each iteration becomes a new workflow run, preventing unbounded
+   * history growth.
+   *
+   * Example:
+   * {{{
+   * object CountdownWorkflow extends DurableFunction1[Int, Int, S] derives DurableFunctionName:
+   *   override val functionName = DurableFunctionName.ofAndRegister(this)
+   *
+   *   def apply(args: Tuple1[Int])(using ...): Durable[Int] = async[Durable] {
+   *     val Tuple1(count) = args
+   *     if count <= 0 then
+   *       count
+   *     else
+   *       await(sleep(1.minute))
+   *       continueWith(Tuple1(count - 1))
+   *   }
+   * }}}
+   */
+  final def continueWith(newArgs: Args)(using
+    backend: S,
+    argsStorage: TupleDurableStorage[Args, S],
+    resultStorage: DurableStorage[R, S]
+  ): Durable[R] =
+    Durable.continueAs(functionName, newArgs, apply(newArgs))
+
 /** Type aliases for common arities (for convenience) */
 type DurableFunction0[R, S <: DurableStorageBackend] = DurableFunction[EmptyTuple, R, S]
 type DurableFunction1[T1, R, S <: DurableStorageBackend] = DurableFunction[Tuple1[T1], R, S]
 type DurableFunction2[T1, T2, R, S <: DurableStorageBackend] = DurableFunction[(T1, T2), R, S]
 type DurableFunction3[T1, T2, T3, R, S <: DurableStorageBackend] = DurableFunction[(T1, T2, T3), R, S]
+
+/**
+ * Extension methods for DurableFunction with common arities.
+ * Provides cleaner syntax without explicit Tuple wrapping.
+ */
+object DurableFunctionSyntax:
+  extension [T1, R, S <: DurableStorageBackend](f: DurableFunction1[T1, R, S])
+    /**
+     * Continue with a single argument (no Tuple1 wrapping needed).
+     *
+     * Example:
+     * {{{
+     * import DurableFunctionSyntax.*
+     *
+     * object CountdownWorkflow extends DurableFunction1[Int, Int, S]:
+     *   def apply(args: Tuple1[Int])(using ...): Durable[Int] = async[Durable] {
+     *     val Tuple1(count) = args
+     *     if count <= 0 then count
+     *     else continueWith(count - 1)  // no Tuple1() needed
+     *   }
+     * }}}
+     */
+    def continueWith(arg: T1)(using
+      backend: S,
+      argsStorage: TupleDurableStorage[Tuple1[T1], S],
+      resultStorage: DurableStorage[R, S]
+    ): Durable[R] =
+      f.continueWith(Tuple1(arg))
+
+  extension [T1, T2, R, S <: DurableStorageBackend](f: DurableFunction2[T1, T2, R, S])
+    /**
+     * Continue with two arguments (no tuple wrapping needed).
+     */
+    def continueWith(arg1: T1, arg2: T2)(using
+      backend: S,
+      argsStorage: TupleDurableStorage[(T1, T2), S],
+      resultStorage: DurableStorage[R, S]
+    ): Durable[R] =
+      f.continueWith((arg1, arg2))
+
+  extension [T1, T2, T3, R, S <: DurableStorageBackend](f: DurableFunction3[T1, T2, T3, R, S])
+    /**
+     * Continue with three arguments (no tuple wrapping needed).
+     */
+    def continueWith(arg1: T1, arg2: T2, arg3: T3)(using
+      backend: S,
+      argsStorage: TupleDurableStorage[(T1, T2, T3), S],
+      resultStorage: DurableStorage[R, S]
+    ): Durable[R] =
+      f.continueWith((arg1, arg2, arg3))
