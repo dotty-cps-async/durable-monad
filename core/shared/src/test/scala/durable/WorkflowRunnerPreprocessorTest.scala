@@ -258,6 +258,27 @@ class WorkflowRunnerPreprocessorTest extends FunSuite:
   // Note: while loops with var assignments are NOT allowed in async[Durable]
   // because var mutations break replay semantics. Use continueWith instead.
 
+  test("async[Durable] - Event[E].receive syntax") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    given DurableEventName[String] = DurableEventName("new-syntax-signal")
+    val ctx = RunContext.fresh(WorkflowId("prep-event-syntax-1"))
+
+    // Using the new Event[E].receive.await syntax - backend type is inferred!
+    val workflow = async[Durable] {
+      val a = 10
+      val signal = Event[String].receive.await
+      a + signal.length
+    }
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowResult.Suspended[?]])
+      val suspended = result.asInstanceOf[WorkflowResult.Suspended[?]]
+      suspended.condition match
+        case WaitCondition.Event(name, _) => assertEquals(name, "new-syntax-signal")
+        case _ => fail("Expected Event condition")
+    }
+  }
+
   test("async[Durable] - complex workflow with multiple activities") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = RunContext.fresh(WorkflowId("prep-complex-1"))

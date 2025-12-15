@@ -136,7 +136,7 @@ object Durable:
   def sleep[S <: DurableStorageBackend](duration: FiniteDuration)(using storage: DurableStorage[Instant, S]): Durable[Instant] =
     sleepUntil(Instant.now().plusMillis(duration.toMillis))
 
-  /** Wait for a broadcast event of type E */
+  /** Wait for a broadcast event of type E (requires explicit backend type) */
   def awaitEvent[E, S <: DurableStorageBackend](using eventName: DurableEventName[E], storage: DurableStorage[E, S]): Durable[E] =
     Suspend(WaitCondition.Event(eventName.name, storage))
 
@@ -247,3 +247,22 @@ object Durable:
   given durablePreprocessor[C <: DurableCpsContext]: CpsPreprocessor[Durable, C] with
     transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
       ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
+
+/**
+ * Event builder for cleaner await syntax with inferred backend type.
+ *
+ * Usage:
+ * {{{
+ * given DurableEventName[MyEvent] = ...
+ * given backend: MemoryBackingStore = ...
+ *
+ * val event = await(Event[MyEvent].receive)
+ * }}}
+ */
+object Event:
+  def apply[E](using eventName: DurableEventName[E]): EventBuilder[E] = EventBuilder(eventName)
+
+class EventBuilder[E](eventName: DurableEventName[E]):
+  /** Receive the event (backend type inferred from context) */
+  def receive[S <: DurableStorageBackend](using backend: S, storage: DurableStorage[E, S]): Durable[E] =
+    Durable.Suspend(WaitCondition.Event(eventName.name, storage))
