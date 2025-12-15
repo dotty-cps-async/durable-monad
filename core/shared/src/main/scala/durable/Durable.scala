@@ -122,7 +122,7 @@ object Durable:
    */
   def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy = RetryPolicy.default)
                      (using storage: DurableStorage[A, S]): Durable[A] =
-    Activity(() => Future.successful(compute), storage, policy)
+    Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy)
 
   /** Suspend the workflow with a wait condition (condition already contains storage) */
   def suspend[A, S <: DurableStorageBackend](condition: WaitCondition[A, S]): Durable[A] =
@@ -197,7 +197,7 @@ object Durable:
      */
     def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy)
                        (using storage: DurableStorage[A, S]): Durable[A] =
-      Durable.Activity(() => Future.successful(compute), storage, policy)
+      Durable.Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy)
 
     /**
      * Async variant of activitySync for dotty-cps-async.

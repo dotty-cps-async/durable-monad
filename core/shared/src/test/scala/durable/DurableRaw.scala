@@ -36,12 +36,12 @@ object DurableRaw:
   /** Create an activity */
   def activity[A, S <: DurableStorageBackend](compute: => Future[A], policy: RetryPolicy = RetryPolicy.default)
                (using storage: DurableStorage[A, S]): DurableRaw[A] =
-    Durable.activity(compute, policy)
+    DurableRaw(Durable.activity(compute, policy))
 
   /** Create a sync activity */
   def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy = RetryPolicy.default)
                    (using storage: DurableStorage[A, S]): DurableRaw[A] =
-    Durable.activitySync(compute, policy)
+    DurableRaw(Durable.activitySync(compute, policy))
 
   /** Local computation */
   def local[A](compute: RunContext => A): DurableRaw[A] =
