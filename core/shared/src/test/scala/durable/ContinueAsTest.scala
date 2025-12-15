@@ -12,39 +12,25 @@ class ContinueAsTest extends FunSuite:
   object CounterWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(count: Int)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
-      resultStorage: DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] =
+    def apply(count: Int)(using MemoryBackingStore): Durable[Int] =
       if count <= 0 then
         Durable.pure(count)
       else
-        val newCount = count - 1
-        Durable.continueAs(functionName.value, Tuple1(newCount), apply(newCount))
+        Durable.continueAs(this)(Tuple1(count - 1))
 
   object SwitchWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(input: String)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[String], MemoryBackingStore],
-      resultStorage: DurableStorage[String, MemoryBackingStore]
-    ): Durable[String] =
+    def apply(input: String)(using MemoryBackingStore): Durable[String] =
       Durable.pure(s"Switched to: $input")
 
   object TransitionWorkflow extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(n: Int)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
-      resultStorage: DurableStorage[String, MemoryBackingStore]
-    ): Durable[String] =
+    def apply(n: Int)(using MemoryBackingStore): Durable[String] =
       if n > 0 then
-        val newArg = s"from-$n"
-        // TupleDurableStorage[Tuple1[String], MemoryBackingStore] is derived automatically from DurableStorage[String, MemoryBackingStore]
-        Durable.continueAs(SwitchWorkflow.functionName.value, Tuple1(newArg), SwitchWorkflow(newArg))
+        // Transition to a different workflow using continueAs
+        Durable.continueAs(SwitchWorkflow)(Tuple1(s"from-$n"))
       else
         Durable.pure("stayed")
 
@@ -154,7 +140,6 @@ class ContinueAsTest extends FunSuite:
 
   import cps.*
   import DurableCpsPreprocessor.given
-  import DurableFunctionSyntax.*
 
   /**
    * Example: Countdown workflow using continueWith with preprocessor.
@@ -163,11 +148,7 @@ class ContinueAsTest extends FunSuite:
   object CountdownWithPreprocessor extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(count: Int)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
-      resultStorage: DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] = async[Durable] {
+    def apply(count: Int)(using MemoryBackingStore): Durable[Int] = async[Durable] {
       if count <= 0 then
         count
       else
@@ -214,11 +195,7 @@ class ContinueAsTest extends FunSuite:
   object AccumulatorWorkflow extends DurableFunction2[Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(count: Int, acc: Int)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[(Int, Int), MemoryBackingStore],
-      resultStorage: DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] = async[Durable] {
+    def apply(count: Int, acc: Int)(using MemoryBackingStore): Durable[Int] = async[Durable] {
       if count <= 0 then
         acc
       else
@@ -252,11 +229,7 @@ class ContinueAsTest extends FunSuite:
   object ProcessAndContinue extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(n: Int)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
-      resultStorage: DurableStorage[String, MemoryBackingStore]
-    ): Durable[String] = async[Durable] {
+    def apply(n: Int)(using MemoryBackingStore): Durable[String] = async[Durable] {
       // This activity is cached before continuing
       val processed = s"step-$n"
       if n <= 0 then
@@ -307,11 +280,7 @@ class ContinueAsTest extends FunSuite:
   object ExplicitTupleWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(n: Int)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
-      resultStorage: DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] =
+    def apply(n: Int)(using MemoryBackingStore): Durable[Int] =
       if n <= 0 then Durable.pure(n)
       else
         // Using base method with explicit Tuple1
@@ -330,4 +299,120 @@ class ContinueAsTest extends FunSuite:
         assertEquals(metadata.functionName, "durable.ContinueAsTest.ExplicitTupleWorkflow")
       case other =>
         fail(s"Expected ContinueAs, got $other")
+  }
+
+  // ==========================================================================
+  // Tests for continueAs extension syntax (switching to different workflow)
+  // ==========================================================================
+
+  /**
+   * Example: Workflow that transitions to another using extension syntax.
+   * Shows the cleaner OtherWorkflow.continueAs(arg) pattern.
+   */
+  object HandoffWorkflow extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName = DurableFunction.register(this)
+
+    def apply(n: Int)(using MemoryBackingStore): Durable[String] = async[Durable] {
+      if n > 0 then
+        // Extension syntax: target.continueAs(arg)
+        await(SwitchWorkflow.continueAs(s"handoff-$n"))
+      else
+        "no-handoff"
+    }
+
+  test("continueAs extension syntax - transition to different workflow") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = HandoffWorkflow(5)
+    val ctx = RunContext.fresh(WorkflowId("test-handoff"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.ContinueAs(metadata, _, _) =>
+          assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")
+          assertEquals(metadata.argCount, 1)
+        case other =>
+          fail(s"Expected ContinueAs to SwitchWorkflow, got $other")
+    }
+  }
+
+  test("continueAs extension syntax - completes when no transition") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = HandoffWorkflow(0)
+    val ctx = RunContext.fresh(WorkflowId("test-no-handoff"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.Completed(value) =>
+          assertEquals(value, "no-handoff")
+        case other =>
+          fail(s"Expected Completed, got $other")
+    }
+  }
+
+  /**
+   * Example: Multi-step state machine using continueAs.
+   * Shows workflow transitions with different argument types.
+   */
+  object StateA extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName = DurableFunction.register(this)
+
+    def apply(n: Int)(using MemoryBackingStore): Durable[String] = async[Durable] {
+      if n > 5 then
+        await(StateB.continueAs(s"value-$n", n))
+      else
+        s"stopped-at-$n"
+    }
+
+  object StateB extends DurableFunction2[String, Int, String, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName = DurableFunction.register(this)
+
+    def apply(label: String, count: Int)(using MemoryBackingStore): Durable[String] =
+      Durable.pure(s"$label-completed-$count")
+
+  test("continueAs with different arity workflows") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = StateA(10)
+    val ctx = RunContext.fresh(WorkflowId("test-state-machine"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.ContinueAs(metadata, _, _) =>
+          assertEquals(metadata.functionName, "durable.ContinueAsTest.StateB")
+          assertEquals(metadata.argCount, 2)
+        case other =>
+          fail(s"Expected ContinueAs to StateB, got $other")
+    }
+  }
+
+  /**
+   * Example: Using the trait's continueAs method directly.
+   * Shows that continueAs is available on DurableFunction trait itself.
+   */
+  object TraitMethodWorkflow extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName = DurableFunction.register(this)
+
+    def apply(n: Int)(using MemoryBackingStore): Durable[String] =
+      if n > 0 then
+        // Using the trait method directly: this.continueAs(target)(args)
+        this.continueAs(SwitchWorkflow)(Tuple1(s"trait-method-$n"))
+      else
+        Durable.pure("no-transition")
+
+  test("continueAs trait method - direct usage") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    val workflow = TraitMethodWorkflow(3)
+    val ctx = RunContext.fresh(WorkflowId("test-trait-method"))
+
+    WorkflowRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowResult.ContinueAs(metadata, _, _) =>
+          assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")
+          assertEquals(metadata.argCount, 1)
+        case other =>
+          fail(s"Expected ContinueAs to SwitchWorkflow, got $other")
+    }
   }

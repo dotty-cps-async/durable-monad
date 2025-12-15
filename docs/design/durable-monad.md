@@ -764,8 +764,6 @@ Each iteration becomes a new workflow run, making it safe for long-running loops
 **Using continueWith with the preprocessor:**
 
 ```scala
-import DurableFunctionSyntax.*  // for cleaner single-arg syntax
-
 object CountdownWorkflow extends DurableFunction1[Int, Int, MyBackend] derives DurableFunctionName:
   override val functionName = DurableFunctionName.ofAndRegister(this)
 
@@ -794,10 +792,10 @@ object SumWorkflow extends DurableFunction2[Int, Int, Int, MyBackend] derives Du
   }
 ```
 
-**Syntax options:**
+**Syntax options for `continueWith` (same workflow):**
 
 ```scala
-// 1. Extension syntax (import DurableFunctionSyntax.*) - no Tuple wrapping
+// 1. Extension syntax - no Tuple wrapping (available automatically)
 await(continueWith(arg1))              // DurableFunction1
 await(continueWith(arg1, arg2))        // DurableFunction2
 await(continueWith(arg1, arg2, arg3))  // DurableFunction3
@@ -805,9 +803,39 @@ await(continueWith(arg1, arg2, arg3))  // DurableFunction3
 // 2. Base method - explicit Tuple wrapping
 await(this.continueWith(Tuple1(arg1)))
 await(this.continueWith((arg1, arg2)))
+```
 
-// 3. Raw API - when switching to different workflow
-await(Durable.continueAs(otherWorkflow.functionName, Tuple1(arg), otherWorkflow(Tuple1(arg))))
+### ContinueAs - Workflow Transitions
+
+Use `continueAs` to transition from one workflow to another (different from `continueWith` which continues the same workflow):
+
+```scala
+object ProcessingWorkflow extends DurableFunction1[Int, String, MyBackend] derives DurableFunctionName:
+  override val functionName = DurableFunction.register(this)
+
+  def apply(n: Int)(using MyBackend): Durable[String] = async[Durable] {
+    if n > threshold then
+      // Transition to a different workflow
+      await(CompletionWorkflow.continueAs(s"result-$n"))  // extension syntax
+    else
+      await(continueWith(n + 1))  // continue as self
+  }
+```
+
+**Syntax options for `continueAs` (different workflow):**
+
+```scala
+// 1. Extension syntax - no Tuple wrapping (available automatically)
+await(OtherWorkflow.continueAs(arg1))              // DurableFunction1
+await(OtherWorkflow.continueAs(arg1, arg2))        // DurableFunction2
+await(OtherWorkflow.continueAs(arg1, arg2, arg3))  // DurableFunction3
+
+// 2. Trait method with explicit target - explicit Tuple wrapping
+await(this.continueAs(OtherWorkflow)(Tuple1(arg1)))
+await(this.continueAs(OtherWorkflow)((arg1, arg2)))
+
+// 3. Durable.continueAs - direct API
+await(Durable.continueAs(OtherWorkflow)(Tuple1(arg1)))
 ```
 
 ### Registry

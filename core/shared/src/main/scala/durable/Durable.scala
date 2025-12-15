@@ -141,25 +141,37 @@ object Durable:
     Suspend(WaitCondition.Event(eventName.name, storage))
 
   /**
-   * Continue as a new workflow with the given arguments.
-   * Clears activity storage, stores new args, and restarts with the new workflow.
+   * Continue as a different workflow with the given arguments.
+   * Clears activity storage, stores new args, and restarts with the target workflow.
    *
-   * @param functionName Name of the function (for metadata)
-   * @param args Tuple of arguments to store
-   * @param workflow The new workflow to run (by-name to avoid infinite recursion)
-   * @return Durable[R] - the result type of the continued workflow
+   * This enables workflow transitions - switching from one workflow to another,
+   * or continuing as the same workflow with new arguments (for loops).
+   *
+   * Example:
+   * {{{
+   * object WorkflowA extends DurableFunction1[Int, String, S] derives DurableFunctionName:
+   *   def apply(n: Int)(using S): Durable[String] = async[Durable] {
+   *     if n > 10 then
+   *       await(WorkflowB.continueAs(s"value-$n"))  // extension syntax
+   *     else
+   *       "done"
+   *   }
+   * }}}
+   *
+   * @param target The target DurableFunction to continue as
+   * @param args Tuple of arguments for the target workflow
+   * @return Durable[R] - the result type of the target workflow
    */
   def continueAs[Args <: Tuple, R, S <: DurableStorageBackend](
-    functionName: String,
-    args: Args,
-    workflow: => Durable[R]
-  )(using argsStorage: TupleDurableStorage[Args, S]): Durable[R] =
+    target: DurableFunction[Args, R, S]
+  )(args: Args)(using storageBackend: S): Durable[R] =
+    val argsStorage = target.argsStorage
     val argCount = argsStorage.size
-    val metadata = WorkflowMetadata(functionName, argCount, argCount)
+    val metadata = WorkflowMetadata(target.functionName.value, argCount, argCount)
     val storeArgsFn = (backend: DurableStorageBackend, wfId: WorkflowId, ec: ExecutionContext) =>
       given ExecutionContext = ec
       argsStorage.storeAll(backend.asInstanceOf[S], wfId, 0, args)
-    ContinueAs(metadata, storeArgsFn, () => workflow)
+    ContinueAs(metadata, storeArgsFn, () => target.applyTupled(args))
 
   /**
    * CpsMonadContext for Durable - provides context for async/await.
