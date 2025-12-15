@@ -87,16 +87,13 @@ object TestEventPayload:
  * Test workflow for engine integration test with custom event type.
  * Uses MemoryWithJsonBackupStorage as concrete backend - allows custom event storage.
  */
-object EngineTestWorkflow extends DurableFunction1[String, String, MemoryWithJsonBackupStorage] derives DurableFunctionName:
-  import MemoryWithJsonBackupStorage.given
+// Import givens at outer scope so trait context parameters can resolve
+import MemoryWithJsonBackupStorage.given
 
+object EngineTestWorkflow extends DurableFunction1[String, String, MemoryWithJsonBackupStorage] derives DurableFunctionName:
   override val functionName = DurableFunction.register(this)
 
-  def apply(input: String)(using
-    backend: MemoryWithJsonBackupStorage,
-    argsStorage: TupleDurableStorage[Tuple1[String], MemoryWithJsonBackupStorage],
-    resultStorage: DurableStorage[String, MemoryWithJsonBackupStorage]
-  ): Durable[String] =
+  def apply(input: String)(using MemoryWithJsonBackupStorage): Durable[String] =
     import TestEventPayload.given
     for
       processed <- Durable.activity(Future.successful(s"processed:$input"))

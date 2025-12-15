@@ -277,6 +277,14 @@ object DurablePreprocessor:
           if isReturnPosition then term  // At return position, don't wrap
           else wrapWithActivity(term)
 
+        // Assignment to var - not allowed in durable workflows (breaks replay semantics)
+        case Assign(lhs, rhs) =>
+          report.errorAndAbort(
+            "Mutable variables (var) are not supported in durable workflows. " +
+            "Use continueWith for loops or immutable state.",
+            term.pos
+          )
+
         case other =>
           report.errorAndAbort(s"DurablePreprocessor: unexpected term type: ${other.getClass.getName}", other.pos)
 

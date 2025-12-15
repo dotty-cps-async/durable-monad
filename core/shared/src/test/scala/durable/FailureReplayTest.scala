@@ -179,6 +179,9 @@ class FailureReplayTest extends FunSuite:
     var shouldFail = true
     var capturedMessage: String = ""
 
+    // Side-effect method to capture the message (avoids var assignment in async block)
+    def capture(msg: String): Unit = capturedMessage = msg
+
     val workflow = async[Durable] {
       try {
         // Activity at index 0 - will fail on first run
@@ -190,7 +193,7 @@ class FailureReplayTest extends FunSuite:
           // On first run: e is RuntimeException, getMessage returns "original error"
           // On replay: e is ReplayedException, but this activity result is cached!
           val msg = e.getMessage
-          capturedMessage = msg
+          capture(msg)
           msg.length
       }
     }

@@ -30,10 +30,9 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     function: DurableFunction[Args, R, S],
     args: Args,
     workflowId: Option[WorkflowId] = None
-  )(using
-    argsStorage: TupleDurableStorage[Args, S],
-    resultStorage: DurableStorage[R, S]
   ): Future[WorkflowId] =
+    val argsStorage = function.argsStorage
+    val resultStorage = function.resultStorage
     val id = workflowId.getOrElse(WorkflowId(java.util.UUID.randomUUID().toString))
     val metadata = WorkflowMetadata(
       functionName = function.functionName.value,
@@ -51,7 +50,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       record = WorkflowRecord(id, metadata, WorkflowStatus.Running, None, None, now, now)
       _ = state.putActive(id, record)
       // Create and run workflow
-      workflow = function.applyTupled(args)(using storage, argsStorage, resultStorage)
+      workflow = function.applyTupled(args)(using storage)
       // For fresh run: activityOffset = argCount, resumeFromIndex = argCount (nothing to replay)
       _ <- runWorkflow(id, workflow, metadata.activityIndex, metadata.activityIndex, resultStorage)
     yield id
@@ -204,13 +203,12 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
   ): Future[Unit] =
     DurableFunctionRegistry.global.lookup(record.metadata.functionName) match
       case Some(funcRecord) =>
-        // Get typed storage instances from registry record
-        val argsStorage = funcRecord.argsStorageTyped[Tuple, S]
-        val resultStorage = funcRecord.resultStorageTyped[Any, S]
+        // Get typed function - storage typeclasses are captured in the trait
         val function = funcRecord.functionTyped[Tuple, Any, S]
+        val resultStorage = function.resultStorage
 
         // Recreate workflow from stored args
-        function.recreateFromStorage(workflowId, storage)(using argsStorage, resultStorage, ec).flatMap {
+        function.recreateFromStorage(workflowId, storage).flatMap {
           case Some(workflow) =>
             // Run from resume point
             runWorkflow(workflowId, workflow, resumeFromIndex, record.metadata.argCount, resultStorage)

@@ -13,16 +13,12 @@ import java.nio.file.{Files, Path, Paths}
  * Does an activity, then suspends waiting for an event.
  * Uses JsonFileStorage as the concrete backend type.
  */
-object CrossProcessWorkflow extends DurableFunction1[String, String, JsonFileStorage] derives DurableFunctionName:
-  import JsonFileStorage.given
+import JsonFileStorage.given
 
+object CrossProcessWorkflow extends DurableFunction1[String, String, JsonFileStorage] derives DurableFunctionName:
   override val functionName = DurableFunction.register(this)
 
-  override def apply(input: String)(using
-    backend: JsonFileStorage,
-    argsStorage: TupleDurableStorage[Tuple1[String], JsonFileStorage],
-    resultStorage: DurableStorage[String, JsonFileStorage]
-  ): Durable[String] =
+  override def apply(input: String)(using JsonFileStorage): Durable[String] =
     // Event name for this workflow
     given DurableEventName[String] = DurableEventName("continue-signal")
     for

@@ -13,26 +13,20 @@ import java.time.Instant
 class WorkflowEngineTest extends FunSuite:
   given ExecutionContext = ExecutionContext.global
 
+  import MemoryBackingStore.given
+
   // Test workflow: simple computation
   object SimpleWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(n: Int)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[Int], MemoryBackingStore],
-      resultStorage: DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] =
+    def apply(n: Int)(using MemoryBackingStore): Durable[Int] =
       Durable.activity(Future.successful(n * 2))
 
   // Test workflow: suspends on event (uses String as event type, so resultStorage works)
   object EventWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(input: String)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[String], MemoryBackingStore],
-      resultStorage: DurableStorage[String, MemoryBackingStore]
-    ): Durable[String] =
+    def apply(input: String)(using MemoryBackingStore): Durable[String] =
       // Use resultStorage for event since event type is String
       given DurableEventName[String] = DurableEventName("test-signal")
       for
@@ -45,11 +39,7 @@ class WorkflowEngineTest extends FunSuite:
   object TimerWorkflow extends DurableFunction1[Long, Instant, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply(delayMs: Long)(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[Tuple1[Long], MemoryBackingStore],
-      resultStorage: DurableStorage[Instant, MemoryBackingStore]
-    ): Durable[Instant] =
+    def apply(delayMs: Long)(using MemoryBackingStore): Durable[Instant] =
       // resultStorage is DurableStorage[Instant, MemoryBackingStore], which is what sleepUntil needs
       Durable.sleepUntil(Instant.now().plusMillis(delayMs))
 
@@ -57,11 +47,7 @@ class WorkflowEngineTest extends FunSuite:
   object FailingWorkflow extends DurableFunction0[String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    def apply()(using
-      backend: MemoryBackingStore,
-      argsStorage: TupleDurableStorage[EmptyTuple, MemoryBackingStore],
-      resultStorage: DurableStorage[String, MemoryBackingStore]
-    ): Durable[String] =
+    def apply()(using MemoryBackingStore): Durable[String] =
       Durable.activity(Future.failed(new RuntimeException("intentional failure")))
 
   // Event type for testing

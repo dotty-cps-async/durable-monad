@@ -19,33 +19,25 @@ class DurableFunctionTest extends FunSuite:
   object SimpleWorkflow extends DurableFunction0[Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    override def apply()(using
-      MemoryBackingStore, TupleDurableStorage[EmptyTuple, MemoryBackingStore], DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] =
+    override def apply()(using MemoryBackingStore): Durable[Int] =
       Durable.pure(42)
 
   object GreetingWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    override def apply(name: String)(using
-      MemoryBackingStore, TupleDurableStorage[Tuple1[String], MemoryBackingStore], DurableStorage[String, MemoryBackingStore]
-    ): Durable[String] =
+    override def apply(name: String)(using MemoryBackingStore): Durable[String] =
       Durable.pure(s"Hello, $name!")
 
   object AddWorkflow extends DurableFunction2[Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    override def apply(a: Int, b: Int)(using
-      MemoryBackingStore, TupleDurableStorage[(Int, Int), MemoryBackingStore], DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] =
+    override def apply(a: Int, b: Int)(using MemoryBackingStore): Durable[Int] =
       Durable.pure(a + b)
 
   object SumThreeWorkflow extends DurableFunction3[Int, Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
     override val functionName = DurableFunction.register(this)
 
-    override def apply(a: Int, b: Int, c: Int)(using
-      MemoryBackingStore, TupleDurableStorage[(Int, Int, Int), MemoryBackingStore], DurableStorage[Int, MemoryBackingStore]
-    ): Durable[Int] =
+    override def apply(a: Int, b: Int, c: Int)(using MemoryBackingStore): Durable[Int] =
       Durable.pure(a + b + c)
 
   test("DurableFunctionName derived with full package name") {
@@ -135,9 +127,7 @@ class DurableFunctionTest extends FunSuite:
     object ActivityWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
       override val functionName = DurableFunction.register(this)
 
-      override def apply(input: String)(using
-        MemoryBackingStore, TupleDurableStorage[Tuple1[String], MemoryBackingStore], DurableStorage[String, MemoryBackingStore]
-      ): Durable[String] =
+      override def apply(input: String)(using MemoryBackingStore): Durable[String] =
         Durable.activity {
           executeCount += 1
           Future.successful(s"Processed: $input")

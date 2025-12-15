@@ -35,8 +35,9 @@ class PreprocessorExternalPackageTest extends FunSuite:
       assertEquals(computeCount, 1)
 
       // Second run - should replay from cache (preprocessor wrapped val as activity)
+      // Resume from index 1 (after the first activity)
       computeCount = 0
-      val ctx2 = ctx.copy(resumeFromIndex = 0)
+      val ctx2 = RunContext.resume(WorkflowId("external-package-test"), 1)
       WorkflowRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowResult.Completed(43))
         assertEquals(computeCount, 0, "Should not recompute on replay - preprocessor should have wrapped val as activity")

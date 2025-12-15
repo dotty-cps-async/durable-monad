@@ -16,6 +16,8 @@ trait WorkflowEngine[S <: DurableStorageBackend]:
   /**
    * Start a new workflow, returns workflow ID.
    *
+   * Storage typeclasses are obtained from the function's trait context parameters.
+   *
    * @param function The workflow function to execute (must be for this backend type S)
    * @param args Arguments to pass to the workflow
    * @param workflowId Optional specific ID (auto-generated if None)
@@ -25,9 +27,6 @@ trait WorkflowEngine[S <: DurableStorageBackend]:
     function: DurableFunction[Args, R, S],
     args: Args,
     workflowId: Option[WorkflowId] = None
-  )(using
-    argsStorage: TupleDurableStorage[Args, S],
-    resultStorage: DurableStorage[R, S]
   ): Future[WorkflowId]
 
   /**

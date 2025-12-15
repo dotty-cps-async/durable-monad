@@ -199,6 +199,24 @@ object Durable:
                        (using storage: DurableStorage[A, S]): Durable[A] =
       Durable.Activity(() => Future.successful(compute), storage, policy)
 
+    /**
+     * Async variant of activitySync for dotty-cps-async.
+     * Called when there's an await inside the activitySync block.
+     * The by-name `=> A` becomes `() => Durable[A]` after CPS transformation.
+     */
+    def activitySync_async[A, S <: DurableStorageBackend](compute: () => Durable[A], policy: RetryPolicy)
+                             (using storage: DurableStorage[A, S]): Durable[A] =
+      compute()
+
+    /**
+     * Async variant of activity for dotty-cps-async.
+     * Called when there's an await inside the activity block.
+     * The by-name `=> Future[A]` becomes `() => Durable[Future[A]]` after CPS transformation.
+     */
+    def activity_async[A, S <: DurableStorageBackend](compute: () => Durable[Future[A]], policy: RetryPolicy)
+                         (using storage: DurableStorage[A, S]): Durable[A] =
+      compute().flatMap(fut => Durable.Activity(() => fut, storage, policy))
+
   /**
    * CpsTryMonad instance for async/await syntax.
    */
@@ -221,3 +239,11 @@ object Durable:
 
     def apply[A](op: Context => Durable[A]): Durable[A] =
       op(new DurableCpsContext)
+
+  /**
+   * CpsPreprocessor for Durable monad - available via companion object.
+   * Automatically wraps val definitions with activity calls for replay-based execution.
+   */
+  given durablePreprocessor[C <: DurableCpsContext]: CpsPreprocessor[Durable, C] with
+    transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
+      ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
