@@ -3,6 +3,20 @@ package durable
 import scala.concurrent.{Future, ExecutionContext}
 
 /**
+ * Opaque type for registered function names.
+ * Can only be created via DurableFunction.register, ensuring all functions are registered.
+ */
+opaque type RegisteredDurableFunctionName = String
+
+object RegisteredDurableFunctionName:
+  /** Get the underlying function name string */
+  extension (name: RegisteredDurableFunctionName)
+    def value: String = name
+
+  /** Internal: create from string (only callable from within durable package) */
+  private[durable] def apply(name: String): RegisteredDurableFunctionName = name
+
+/**
  * Unified trait for serializable workflow definitions.
  *
  * DurableFunction enables workflow definitions to be stored and restored:
@@ -11,7 +25,7 @@ import scala.concurrent.{Future, ExecutionContext}
  * - On restore: lookup function by name, deserialize args, recreate Durable[R]
  *
  * Implementations must be objects (not classes) for reliable lookup by name.
- * Use `derives DurableFunctionName` and override `functionName` to enable auto-registration.
+ * Use `derives DurableFunctionName` and call `DurableFunction.register(this)` to register.
  *
  * @tparam Args tuple of argument types (EmptyTuple for no args, Tuple1[T] for one arg, etc.)
  * @tparam R result type (must have DurableStorage for caching)
@@ -20,7 +34,7 @@ import scala.concurrent.{Future, ExecutionContext}
  * Example:
  * {{{
  * object PaymentWorkflow extends DurableFunction1[String, Payment, MyBackend] derives DurableFunctionName:
- *   override val functionName = DurableFunctionName.ofAndRegister(this)
+ *   override val functionName = DurableFunction.register(this)
  *
  *   override def apply(orderId: String)(using
  *     MyBackend, TupleDurableStorage[Tuple1[String], MyBackend], DurableStorage[Payment, MyBackend]
@@ -33,7 +47,7 @@ import scala.concurrent.{Future, ExecutionContext}
  */
 trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
   /** Unique name for this function, used for serialization and registry lookup */
-  def functionName: String
+  def functionName: RegisteredDurableFunctionName
 
   /** Apply the function to arguments as a tuple */
   def applyTupled(args: Args)(using
@@ -65,18 +79,6 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
     }
 
   /**
-   * Register this function with its storage typeclass instances.
-   * Call this during functionName initialization, with storage givens in scope.
-   * Takes name explicitly since functionName may not be assigned yet.
-   */
-  protected final def registerWith(name: String)(using
-    argsStorage: TupleDurableStorage[Args, S],
-    resultStorage: DurableStorage[R, S]
-  ): Unit =
-    val record = FunctionRecord(this, argsStorage, resultStorage)
-    DurableFunctionRegistry.global.register(name, record)
-
-  /**
    * Continue as a new invocation of this workflow with new arguments.
    * Clears activity storage and restarts with the new args.
    *
@@ -87,7 +89,7 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
    * Example:
    * {{{
    * object CountdownWorkflow extends DurableFunction1[Int, Int, S] derives DurableFunctionName:
-   *   override val functionName = DurableFunctionName.ofAndRegister(this)
+   *   override val functionName = DurableFunction.register(this)
    *
    *   def apply(count: Int)(using ...): Durable[Int] = async[Durable] {
    *     if count <= 0 then
@@ -103,7 +105,7 @@ trait DurableFunction[Args <: Tuple, R, S <: DurableStorageBackend]:
     argsStorage: TupleDurableStorage[Args, S],
     resultStorage: DurableStorage[R, S]
   ): Durable[R] =
-    Durable.continueAs(functionName, newArgs, applyTupled(newArgs))
+    Durable.continueAs(functionName.value, newArgs, applyTupled(newArgs))
 
 /** Trait for 0-argument durable functions */
 trait DurableFunction0[R, S <: DurableStorageBackend] extends DurableFunction[EmptyTuple, R, S]:
@@ -220,3 +222,35 @@ object DurableFunctionSyntax:
       resultStorage: DurableStorage[R, S]
     ): Durable[R] =
       f.continueWith((arg1, arg2, arg3))
+
+/**
+ * Companion object for DurableFunction providing registration.
+ */
+object DurableFunction:
+  /**
+   * Register a DurableFunction and return its registered name.
+   * This is the only way to create a RegisteredDurableFunctionName,
+   * ensuring all functions are properly registered.
+   *
+   * Requires:
+   * - DurableFunctionName typeclass instance (use `derives DurableFunctionName`)
+   * - Storage typeclass instances for args and result
+   *
+   * Example:
+   * {{{
+   * object MyWorkflow extends DurableFunction1[String, Int, MyBackend] derives DurableFunctionName:
+   *   override val functionName = DurableFunction.register(this)
+   *   // ...
+   * }}}
+   */
+  inline def register[Args <: Tuple, R, S <: DurableStorageBackend](
+    f: DurableFunction[Args, R, S]
+  )(using
+    fn: DurableFunctionName[f.type],
+    argsStorage: TupleDurableStorage[Args, S],
+    resultStorage: DurableStorage[R, S]
+  ): RegisteredDurableFunctionName =
+    val name = fn.name
+    val record = FunctionRecord(f, argsStorage, resultStorage)
+    DurableFunctionRegistry.global.register(name, record)
+    RegisteredDurableFunctionName(name)

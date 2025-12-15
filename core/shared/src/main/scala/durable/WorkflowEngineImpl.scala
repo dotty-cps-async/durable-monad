@@ -36,7 +36,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
   ): Future[WorkflowId] =
     val id = workflowId.getOrElse(WorkflowId(java.util.UUID.randomUUID().toString))
     val metadata = WorkflowMetadata(
-      functionName = function.functionName,
+      functionName = function.functionName.value,
       argCount = argsStorage.size,
       activityIndex = argsStorage.size  // activities start after args
     )

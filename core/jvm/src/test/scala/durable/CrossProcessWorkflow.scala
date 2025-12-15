@@ -16,7 +16,7 @@ import java.nio.file.{Files, Path, Paths}
 object CrossProcessWorkflow extends DurableFunction1[String, String, JsonFileStorage] derives DurableFunctionName:
   import JsonFileStorage.given
 
-  override val functionName: String = DurableFunctionName.ofAndRegister(this)
+  override val functionName = DurableFunction.register(this)
 
   override def apply(input: String)(using
     backend: JsonFileStorage,
@@ -73,7 +73,7 @@ object ProcessA:
 
         // Save metadata for Process B
         storage.storeMetadata(workflowId, JsonWorkflowMetadata(
-          functionName = CrossProcessWorkflow.functionName,
+          functionName = CrossProcessWorkflow.functionName.value,
           argTypes = List("java.lang.String"),
           argsJson = writeToString(input)(using JsonFileStorage.given_JsonValueCodec_String),
           activityIndex = snapshot.activityIndex,
@@ -133,7 +133,7 @@ object ProcessB:
       throw new RuntimeException("unreachable")
     }
 
-    println(s"[ProcessB] Found function in registry: ${function.function.functionName}")
+    println(s"[ProcessB] Found function in registry: ${function.function.functionName.value}")
 
     // Deserialize args and recreate workflow
     val input = readFromString[String](metadata.argsJson)(using JsonFileStorage.given_JsonValueCodec_String)

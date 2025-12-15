@@ -90,7 +90,7 @@ object TestEventPayload:
 object EngineTestWorkflow extends DurableFunction1[String, String, MemoryWithJsonBackupStorage] derives DurableFunctionName:
   import MemoryWithJsonBackupStorage.given
 
-  override val functionName: String = DurableFunctionName.ofAndRegister(this)
+  override val functionName = DurableFunction.register(this)
 
   def apply(input: String)(using
     backend: MemoryWithJsonBackupStorage,

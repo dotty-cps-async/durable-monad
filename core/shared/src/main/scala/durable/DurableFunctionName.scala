@@ -18,25 +18,6 @@ object DurableFunctionName:
     new DurableFunctionName[F]:
       def name: String = n
 
-  /** Helper to get name from derived given */
-  inline def of[F <: DurableFunction[?, ?, ?]](using fn: DurableFunctionName[F]): String = fn.name
-
-  /**
-   * Get name and register the function in the global registry.
-   * Requires storage typeclass instances in scope.
-   */
-  inline def ofAndRegister[Args <: Tuple, R, S <: DurableStorageBackend](
-    f: DurableFunction[Args, R, S]
-  )(using
-    fn: DurableFunctionName[f.type],
-    argsStorage: TupleDurableStorage[Args, S],
-    resultStorage: DurableStorage[R, S]
-  ): String =
-    val name = fn.name
-    val record = FunctionRecord(f, argsStorage, resultStorage)
-    DurableFunctionRegistry.global.register(name, record)
-    name
-
   /** Derive name from object's fully qualified type name using macro */
   inline def derived[F <: DurableFunction[?, ?, ?]]: DurableFunctionName[F] =
     ${ derivedImpl[F] }

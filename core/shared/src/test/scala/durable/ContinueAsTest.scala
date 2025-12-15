@@ -10,7 +10,7 @@ class ContinueAsTest extends FunSuite:
   import MemoryBackingStore.given
 
   object CounterWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(count: Int)(using
       backend: MemoryBackingStore,
@@ -21,10 +21,10 @@ class ContinueAsTest extends FunSuite:
         Durable.pure(count)
       else
         val newCount = count - 1
-        Durable.continueAs(functionName, Tuple1(newCount), apply(newCount))
+        Durable.continueAs(functionName.value, Tuple1(newCount), apply(newCount))
 
   object SwitchWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(input: String)(using
       backend: MemoryBackingStore,
@@ -34,7 +34,7 @@ class ContinueAsTest extends FunSuite:
       Durable.pure(s"Switched to: $input")
 
   object TransitionWorkflow extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(n: Int)(using
       backend: MemoryBackingStore,
@@ -44,7 +44,7 @@ class ContinueAsTest extends FunSuite:
       if n > 0 then
         val newArg = s"from-$n"
         // TupleDurableStorage[Tuple1[String], MemoryBackingStore] is derived automatically from DurableStorage[String, MemoryBackingStore]
-        Durable.continueAs(SwitchWorkflow.functionName, Tuple1(newArg), SwitchWorkflow(newArg))
+        Durable.continueAs(SwitchWorkflow.functionName.value, Tuple1(newArg), SwitchWorkflow(newArg))
       else
         Durable.pure("stayed")
 
@@ -161,7 +161,7 @@ class ContinueAsTest extends FunSuite:
    * Each iteration is a new workflow run, preventing unbounded history growth.
    */
   object CountdownWithPreprocessor extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(count: Int)(using
       backend: MemoryBackingStore,
@@ -212,7 +212,7 @@ class ContinueAsTest extends FunSuite:
    * Sums numbers from n down to 0 using continueWith.
    */
   object AccumulatorWorkflow extends DurableFunction2[Int, Int, Int, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(count: Int, acc: Int)(using
       backend: MemoryBackingStore,
@@ -250,7 +250,7 @@ class ContinueAsTest extends FunSuite:
    * Shows that activities are cached before the loop continues.
    */
   object ProcessAndContinue extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(n: Int)(using
       backend: MemoryBackingStore,
@@ -305,7 +305,7 @@ class ContinueAsTest extends FunSuite:
    * Shows the non-extension syntax.
    */
   object ExplicitTupleWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName: String = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(n: Int)(using
       backend: MemoryBackingStore,

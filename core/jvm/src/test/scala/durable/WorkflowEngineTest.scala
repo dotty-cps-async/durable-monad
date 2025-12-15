@@ -15,7 +15,7 @@ class WorkflowEngineTest extends FunSuite:
 
   // Test workflow: simple computation
   object SimpleWorkflow extends DurableFunction1[Int, Int, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(n: Int)(using
       backend: MemoryBackingStore,
@@ -26,7 +26,7 @@ class WorkflowEngineTest extends FunSuite:
 
   // Test workflow: suspends on event (uses String as event type, so resultStorage works)
   object EventWorkflow extends DurableFunction1[String, String, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(input: String)(using
       backend: MemoryBackingStore,
@@ -43,7 +43,7 @@ class WorkflowEngineTest extends FunSuite:
 
   // Test workflow: suspends on timer, returns wake time
   object TimerWorkflow extends DurableFunction1[Long, Instant, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply(delayMs: Long)(using
       backend: MemoryBackingStore,
@@ -55,7 +55,7 @@ class WorkflowEngineTest extends FunSuite:
 
   // Test workflow: fails
   object FailingWorkflow extends DurableFunction0[String, MemoryBackingStore] derives DurableFunctionName:
-    override val functionName = DurableFunctionName.ofAndRegister(this)
+    override val functionName = DurableFunction.register(this)
 
     def apply()(using
       backend: MemoryBackingStore,
