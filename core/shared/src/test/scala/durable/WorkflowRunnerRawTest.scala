@@ -5,7 +5,7 @@ import munit.FunSuite
 import cps.*
 
 /**
- * Tests for WorkflowRunner using async[DurableRaw] syntax.
+ * Tests for WorkflowSessionRunner using async[DurableRaw] syntax.
  *
  * This tests the raw API without preprocessor transformation.
  * Vals are NOT automatically wrapped as activities - you must use
@@ -14,42 +14,45 @@ import cps.*
  * This is the minimal layer for debugging - if something breaks,
  * start here to isolate whether it's a runner issue or preprocessor issue.
  */
-class WorkflowRunnerRawTest extends FunSuite:
+class WorkflowSessionRunnerRawTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import MemoryBackingStore.given
 
   test("async[DurableRaw] - pure value") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-pure-1"))
+    val workflowId = WorkflowId("raw-pure-1")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       42
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
     }
   }
 
   test("async[DurableRaw] - val without activity is not cached") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-val-1"))
+    val workflowId = WorkflowId("raw-val-1")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val x = 21
       x * 2
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(backing.size, 0, "No activities should be cached")
     }
   }
 
   test("async[DurableRaw] - explicit activity is cached") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-activity-1"))
+    val workflowId = WorkflowId("raw-activity-1")
+    val ctx = RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -60,8 +63,8 @@ class WorkflowRunnerRawTest extends FunSuite:
       x
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(executeCount, 1)
       assertEquals(backing.size, 1)
     }
@@ -84,15 +87,16 @@ class WorkflowRunnerRawTest extends FunSuite:
       x
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42)) // cached value
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42)) // cached value
       assertEquals(executeCount, 0) // NOT executed
     }
   }
 
   test("async[DurableRaw] - multiple activities in sequence") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-seq-1"))
+    val workflowId = WorkflowId("raw-seq-1")
+    val ctx = RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -102,8 +106,8 @@ class WorkflowRunnerRawTest extends FunSuite:
       a + b + c
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(executeCount, 3)
       assertEquals(backing.size, 3)
     }
@@ -126,8 +130,8 @@ class WorkflowRunnerRawTest extends FunSuite:
       a + b + c
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(executeCount, 1) // Only c executed
       assertEquals(backing.size, 3)
     }
@@ -135,7 +139,8 @@ class WorkflowRunnerRawTest extends FunSuite:
 
   test("async[DurableRaw] - sync activity") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-sync-1"))
+    val workflowId = WorkflowId("raw-sync-1")
+    val ctx = RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -146,8 +151,8 @@ class WorkflowRunnerRawTest extends FunSuite:
       x + 1
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(43))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
       assertEquals(executeCount, 1)
       assertEquals(backing.size, 1)
     }
@@ -155,7 +160,8 @@ class WorkflowRunnerRawTest extends FunSuite:
 
   test("async[DurableRaw] - if expression") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-if-1"))
+    val workflowId = WorkflowId("raw-if-1")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val cond = await(DurableRaw.activitySync(true))
@@ -165,15 +171,16 @@ class WorkflowRunnerRawTest extends FunSuite:
         await(DurableRaw.activitySync(0))
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(backing.size, 2) // cond + result
     }
   }
 
   test("async[DurableRaw] - error handling") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-error-1"))
+    val workflowId = WorkflowId("raw-error-1")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val x = await(DurableRaw.activitySync(10))
@@ -181,16 +188,17 @@ class WorkflowRunnerRawTest extends FunSuite:
       x + 1
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assert(result.isInstanceOf[WorkflowResult.Failed[?]])
-      val failed = result.asInstanceOf[WorkflowResult.Failed[Int]]
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowSessionResult.Failed])
+      val failed = result.asInstanceOf[WorkflowSessionResult.Failed]
       assertEquals(failed.error.originalMessage, "test error")
     }
   }
 
   test("async[DurableRaw] - try/catch") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-try-1"))
+    val workflowId = WorkflowId("raw-try-1")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       try {
@@ -201,28 +209,30 @@ class WorkflowRunnerRawTest extends FunSuite:
       }
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(-1))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, -1))
     }
   }
 
   test("async[DurableRaw] - local computation") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("raw-local-1"))
+    val workflowId = WorkflowId("raw-local-1")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow: Durable[WorkflowId] = async[DurableRaw] {
       await(DurableRaw(Durable.local(ctx => ctx.workflowId)))
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(WorkflowId("raw-local-1")))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, WorkflowId("raw-local-1")))
     }
   }
 
   test("async[DurableRaw] - suspend on event") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     given DurableEventName[String] = DurableEventName("test-signal")
-    val ctx = RunContext.fresh(WorkflowId("raw-suspend-1"))
+    val workflowId = WorkflowId("raw-suspend-1")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val a = await(DurableRaw.activitySync(10))
@@ -231,9 +241,9 @@ class WorkflowRunnerRawTest extends FunSuite:
       a + b
     }.toDurable
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assert(result.isInstanceOf[WorkflowResult.Suspended[?]])
-      val suspended = result.asInstanceOf[WorkflowResult.Suspended[?]]
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]])
+      val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
       suspended.condition match
         case WaitCondition.Event(name, _) => assertEquals(name, "test-signal")
         case _ => fail("Expected Event condition")

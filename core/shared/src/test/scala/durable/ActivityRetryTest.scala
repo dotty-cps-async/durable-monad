@@ -26,9 +26,10 @@ class ActivityRetryTest extends FunSuite:
       Future.successful(42)
     }
 
-    val ctx = RunContext.fresh(WorkflowId("retry-test-1"), testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    val workflowId = WorkflowId("retry-test-1")
+    val ctx = RunContext.fresh(workflowId, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(attemptCount, 1)
     }
   }
@@ -48,9 +49,10 @@ class ActivityRetryTest extends FunSuite:
       RetryPolicy(maxAttempts = 5)
     )
 
-    val ctx = RunContext.fresh(WorkflowId("retry-test-2"), testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    val workflowId = WorkflowId("retry-test-2")
+    val ctx = RunContext.fresh(workflowId, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(attemptCount, 3)
     }
   }
@@ -67,9 +69,10 @@ class ActivityRetryTest extends FunSuite:
       RetryPolicy(maxAttempts = 3)
     )
 
-    val ctx = RunContext.fresh(WorkflowId("retry-test-3"), testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assert(result.isInstanceOf[WorkflowResult.Failed[?]])
+    val workflowId = WorkflowId("retry-test-3")
+    val ctx = RunContext.fresh(workflowId, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 3)
     }
   }
@@ -108,9 +111,10 @@ class ActivityRetryTest extends FunSuite:
       retryLogger = event => events += event,
       scheduler = Scheduler.immediate
     )
-    val ctx = RunContext.fresh(WorkflowId("retry-test-4"), config)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assert(result.isInstanceOf[WorkflowResult.Failed[?]])
+    val workflowId = WorkflowId("retry-test-4")
+    val ctx = RunContext.fresh(workflowId, config)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // Only one attempt - no retries for non-recoverable
       assertEquals(events.size, 1) // One event logged
       assertEquals(events.head.willRetry, false) // Should not retry
@@ -138,9 +142,10 @@ class ActivityRetryTest extends FunSuite:
       policy
     )
 
-    val ctx = RunContext.fresh(WorkflowId("retry-test-5"), testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assert(result.isInstanceOf[WorkflowResult.Failed[?]])
+    val workflowId = WorkflowId("retry-test-5")
+    val ctx = RunContext.fresh(workflowId, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // No retry - IllegalStateException not in recoverable list
     }
   }
@@ -168,9 +173,10 @@ class ActivityRetryTest extends FunSuite:
       RetryPolicy(maxAttempts = 3)
     )
 
-    val ctx = RunContext.fresh(WorkflowId("retry-test-6"), config)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    val workflowId = WorkflowId("retry-test-6")
+    val ctx = RunContext.fresh(workflowId, config)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(events.size, 1)
       assertEquals(events.head.attempt, 1)
       assertEquals(events.head.willRetry, true)
@@ -185,18 +191,21 @@ class ActivityRetryTest extends FunSuite:
     backing.put(WorkflowId("retry-test-7"), 0, Right(42))
 
     var attemptCount = 0
-    val workflow = Durable.activity(
+    val workflow: Durable[Int] = Durable.activity(
       {
         attemptCount += 1
-        Future.failed(RuntimeException("Should not be called during replay"))
+        Future.failed[Int](RuntimeException("Should not be called during replay"))
       },
       RetryPolicy(maxAttempts = 3)
     )
 
     // Resume from index 1 (activity at index 0 is cached)
-    val ctx = RunContext.resume(WorkflowId("retry-test-7"), 1, testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    val workflowId = WorkflowId("retry-test-7")
+    val ctx = RunContext.resume(workflowId, 1, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      result match
+        case WorkflowSessionResult.Completed(_, value) => assertEquals(value, 42)
+        case other => fail(s"Expected Completed, got $other")
       assertEquals(attemptCount, 0) // No execution during replay
     }
   }
@@ -213,9 +222,10 @@ class ActivityRetryTest extends FunSuite:
       RetryPolicy.noRetry
     )
 
-    val ctx = RunContext.fresh(WorkflowId("retry-test-8"), testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assert(result.isInstanceOf[WorkflowResult.Failed[?]])
+    val workflowId = WorkflowId("retry-test-8")
+    val ctx = RunContext.fresh(workflowId, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // Only one attempt with noRetry
     }
   }

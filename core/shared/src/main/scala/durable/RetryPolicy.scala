@@ -17,7 +17,7 @@ import scala.concurrent.duration.*
 case class RetryPolicy(
   maxAttempts: Int = 3,
   initialBackoff: FiniteDuration = 100.millis,
-  maxBackoff: FiniteDuration = 30.seconds,
+  maxBackoff: FiniteDuration = 300.seconds,
   backoffMultiplier: Double = 2.0,
   jitterFactor: Double = 0.1,
   isRecoverable: Throwable => Boolean = RetryPolicy.defaultIsRecoverable,

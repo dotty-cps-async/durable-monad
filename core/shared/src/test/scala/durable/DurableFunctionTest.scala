@@ -114,10 +114,11 @@ class DurableFunctionTest extends FunSuite:
 
   test("DurableFunction workflow can be run") {
     val workflow = GreetingWorkflow.apply("Claude")
-    val ctx = RunContext.fresh(WorkflowId("test-fn-1"))
+    val workflowId = WorkflowId("test-fn-1")
+    val ctx = RunContext.fresh(workflowId)
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed("Hello, Claude!"))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, "Hello, Claude!"))
     }
   }
 
@@ -134,10 +135,11 @@ class DurableFunctionTest extends FunSuite:
         }
 
     val workflow = ActivityWorkflow.apply("test")
-    val ctx = RunContext.fresh(WorkflowId("test-fn-2"))
+    val workflowId = WorkflowId("test-fn-2")
+    val ctx = RunContext.fresh(workflowId)
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed("Processed: test"))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, "Processed: test"))
       assertEquals(executeCount, 1)
     }
   }

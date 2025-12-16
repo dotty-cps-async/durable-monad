@@ -4,10 +4,10 @@ import scala.concurrent.{Future, ExecutionContext}
 import munit.FunSuite
 
 /**
- * Tests for WorkflowRunner - the interpreter for Durable Free Monad.
+ * Tests for WorkflowSessionRunner - the interpreter for Durable Free Monad.
  * Uses async tests (returning Future) for cross-platform compatibility.
  */
-class WorkflowRunnerTest extends FunSuite:
+class WorkflowSessionRunnerTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import MemoryBackingStore.given
@@ -19,44 +19,48 @@ class WorkflowRunnerTest extends FunSuite:
 
   test("run pure value") {
     withStorage {
-      val ctx = RunContext.fresh(WorkflowId("test-1"))
+      val workflowId = WorkflowId("test-1")
+    val ctx = RunContext.fresh(workflowId)
 
       val workflow = Durable.pure[Int](42)
-      WorkflowRunner.run(workflow, ctx).map { result =>
-        assertEquals(result, WorkflowResult.Completed(42))
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       }
     }
   }
 
   test("run map") {
     withStorage {
-      val ctx = RunContext.fresh(WorkflowId("test-2"))
+      val workflowId = WorkflowId("test-2")
+    val ctx = RunContext.fresh(workflowId)
 
       val workflow = Durable.pure[Int](21).map(_ * 2)
-      WorkflowRunner.run(workflow, ctx).map { result =>
-        assertEquals(result, WorkflowResult.Completed(42))
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       }
     }
   }
 
   test("run flatMap") {
     withStorage {
-      val ctx = RunContext.fresh(WorkflowId("test-3"))
+      val workflowId = WorkflowId("test-3")
+    val ctx = RunContext.fresh(workflowId)
 
       val workflow = for
         a <- Durable.pure[Int](10)
         b <- Durable.pure[Int](32)
       yield a + b
 
-      WorkflowRunner.run(workflow, ctx).map { result =>
-        assertEquals(result, WorkflowResult.Completed(42))
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       }
     }
   }
 
   test("run local computation") {
     withStorage {
-      val ctx = RunContext.fresh(WorkflowId("test-4"))
+      val workflowId = WorkflowId("test-4")
+    val ctx = RunContext.fresh(workflowId)
 
       var computed = false
       val workflow = Durable.local[Int] { _ =>
@@ -66,8 +70,8 @@ class WorkflowRunnerTest extends FunSuite:
 
       assertEquals(computed, false) // not computed yet
 
-      WorkflowRunner.run(workflow, ctx).map { result =>
-        assertEquals(result, WorkflowResult.Completed(42))
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
         assertEquals(computed, true) // now computed
       }
     }
@@ -75,7 +79,8 @@ class WorkflowRunnerTest extends FunSuite:
 
   test("run activity - executes and caches") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("test-5"))
+    val workflowId = WorkflowId("test-5")
+    val ctx = RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow = Durable.activity {
@@ -83,8 +88,8 @@ class WorkflowRunnerTest extends FunSuite:
       Future.successful(42)
     }
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(executeCount, 1)
       assertEquals(backing.size, 1)
     }
@@ -96,7 +101,8 @@ class WorkflowRunnerTest extends FunSuite:
     backing.put(WorkflowId("test-6"), 0, Right(42))
 
     // Resume from index 1 (after index 0 is cached)
-    val ctx = RunContext.resume(WorkflowId("test-6"), 1)
+    val workflowId = WorkflowId("test-6")
+    val ctx = RunContext.resume(workflowId, 1)
 
     var executeCount = 0
     val workflow = Durable.activity {
@@ -104,8 +110,8 @@ class WorkflowRunnerTest extends FunSuite:
       Future.successful(999) // different value - should NOT be used
     }
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42)) // cached value
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42)) // cached value
       assertEquals(executeCount, 0) // NOT executed
     }
   }
@@ -113,7 +119,8 @@ class WorkflowRunnerTest extends FunSuite:
   test("run suspend") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     given DurableEventName[String] = DurableEventName("waiting for signal")
-    val ctx = RunContext.fresh(WorkflowId("test-7"))
+    val workflowId = WorkflowId("test-7")
+    val ctx = RunContext.fresh(workflowId)
 
     val workflow = for
       a <- Durable.pure[Int](10)
@@ -121,9 +128,9 @@ class WorkflowRunnerTest extends FunSuite:
       b <- Durable.pure[Int](32)
     yield a + b
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assert(result.isInstanceOf[WorkflowResult.Suspended[?]])
-      val suspended = result.asInstanceOf[WorkflowResult.Suspended[?]]
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]])
+      val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
       suspended.condition match
         case WaitCondition.Event(name, _) => assertEquals(name, "waiting for signal")
         case _ => fail("Expected Event condition")
@@ -132,7 +139,8 @@ class WorkflowRunnerTest extends FunSuite:
 
   test("run error") {
     withStorage {
-      val ctx = RunContext.fresh(WorkflowId("test-8"))
+      val workflowId = WorkflowId("test-8")
+    val ctx = RunContext.fresh(workflowId)
 
       val workflow = for
         a <- Durable.pure[Int](10)
@@ -140,9 +148,9 @@ class WorkflowRunnerTest extends FunSuite:
         b <- Durable.pure[Int](32)
       yield a + b
 
-      WorkflowRunner.run(workflow, ctx).map { result =>
-        assert(result.isInstanceOf[WorkflowResult.Failed[?]])
-        val failed = result.asInstanceOf[WorkflowResult.Failed[Int]]
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        assert(result.isInstanceOf[WorkflowSessionResult.Failed])
+        val failed = result.asInstanceOf[WorkflowSessionResult.Failed]
         assertEquals(failed.error.originalMessage, "test error")
       }
     }
@@ -150,7 +158,8 @@ class WorkflowRunnerTest extends FunSuite:
 
   test("run multiple activities in sequence") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("test-9"))
+    val workflowId = WorkflowId("test-9")
+    val ctx = RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow = for
@@ -159,8 +168,8 @@ class WorkflowRunnerTest extends FunSuite:
       c <- Durable.activity { executeCount += 1; Future.successful(12) }
     yield a + b + c
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(executeCount, 3)
       assertEquals(backing.size, 3)
     }
@@ -184,8 +193,8 @@ class WorkflowRunnerTest extends FunSuite:
       c <- Durable.activity { executeCount += 1; Future.successful(12) }
     yield a + b + c
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(executeCount, 1) // Only c executed
       assertEquals(backing.size, 3) // All three now cached
     }
@@ -193,21 +202,23 @@ class WorkflowRunnerTest extends FunSuite:
 
   test("local computation has access to context") {
     withStorage {
-      val ctx = RunContext.fresh(WorkflowId("test-11"))
+      val workflowId = WorkflowId("test-11")
+    val ctx = RunContext.fresh(workflowId)
 
       val workflow = Durable.local[WorkflowId] { ctx =>
         ctx.workflowId
       }
 
-      WorkflowRunner.run(workflow, ctx).map { result =>
-        assertEquals(result, WorkflowResult.Completed(WorkflowId("test-11")))
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, WorkflowId("test-11")))
       }
     }
   }
 
   test("activity result is cached") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("test-12"))
+    val workflowId = WorkflowId("test-12")
+    val ctx = RunContext.fresh(workflowId)
 
     var callCount = 0
     val workflow = Durable.activity {
@@ -215,8 +226,8 @@ class WorkflowRunnerTest extends FunSuite:
       Future.successful(42)
     }
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(42))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
       assertEquals(callCount, 1)
       assertEquals(backing.size, 1) // Result was cached
     }

@@ -64,20 +64,20 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
     val ctx = RunContext(workflowId, storage, resumeFromIndex, activityOffset, config.runConfig)
-    val runnerFuture = WorkflowRunner.run(workflow, ctx)
-    state.putRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowResult[?]]])
+    val runnerFuture = WorkflowSessionRunner.run(workflow, ctx)
+    state.putRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
 
     runnerFuture.flatMap {
-      case WorkflowResult.Completed(value) =>
+      case WorkflowSessionResult.Completed(_, value) =>
         handleCompleted(workflowId, value, resultStorage)
 
-      case WorkflowResult.Suspended(snapshot, condition) =>
+      case WorkflowSessionResult.Suspended(snapshot, condition) =>
         handleSuspended(workflowId, snapshot, condition)
 
-      case WorkflowResult.Failed(error) =>
+      case WorkflowSessionResult.Failed(_, error) =>
         handleFailed(workflowId, error)
 
-      case ca: WorkflowResult.ContinueAs[A] @unchecked =>
+      case ca: WorkflowSessionResult.ContinueAs[A] @unchecked =>
         handleContinueAs(workflowId, ca, resultStorage)
     }.recover { case e =>
       // Unexpected error in runner
@@ -121,7 +121,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     state.removeActive(workflowId)
     storage.updateWorkflowStatus(workflowId, WorkflowStatus.Failed)
 
-  private def handleContinueAs[A](workflowId: WorkflowId, ca: WorkflowResult.ContinueAs[A], resultStorage: DurableStorage[A, S]): Future[Unit] =
+  private def handleContinueAs[A](workflowId: WorkflowId, ca: WorkflowSessionResult.ContinueAs[A], resultStorage: DurableStorage[A, S]): Future[Unit] =
     for
       _ <- storage.clear(workflowId)
       _ <- ca.storeArgs(storage, workflowId, ec)

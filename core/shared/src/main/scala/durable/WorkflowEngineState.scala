@@ -16,7 +16,7 @@ import scala.concurrent.Future
  */
 class WorkflowEngineState(
   private val activeMap: mutable.Map[WorkflowId, WorkflowRecord],
-  private val runnersMap: mutable.Map[WorkflowId, Future[WorkflowResult[?]]],
+  private val runnersMap: mutable.Map[WorkflowId, Future[WorkflowSessionResult[?]]],
   private val timersMap: mutable.Map[WorkflowId, TimerHandle]
 ):
   // Active workflows (Running or Suspended)
@@ -39,13 +39,13 @@ class WorkflowEngineState(
 
   // Running workflows (have active Future)
 
-  def getRunner(workflowId: WorkflowId): Option[Future[WorkflowResult[?]]] =
+  def getRunner(workflowId: WorkflowId): Option[Future[WorkflowSessionResult[?]]] =
     runnersMap.get(workflowId)
 
-  def putRunner(workflowId: WorkflowId, future: Future[WorkflowResult[?]]): Unit =
+  def putRunner(workflowId: WorkflowId, future: Future[WorkflowSessionResult[?]]): Unit =
     runnersMap.put(workflowId, future)
 
-  def removeRunner(workflowId: WorkflowId): Option[Future[WorkflowResult[?]]] =
+  def removeRunner(workflowId: WorkflowId): Option[Future[WorkflowSessionResult[?]]] =
     runnersMap.remove(workflowId)
 
   def isRunning(workflowId: WorkflowId): Boolean =

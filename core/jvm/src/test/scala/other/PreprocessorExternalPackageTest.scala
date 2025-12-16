@@ -30,16 +30,16 @@ class PreprocessorExternalPackageTest extends FunSuite:
     }
 
     // First run - should compute
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(43))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
       assertEquals(computeCount, 1)
 
       // Second run - should replay from cache (preprocessor wrapped val as activity)
       // Resume from index 1 (after the first activity)
       computeCount = 0
       val ctx2 = RunContext.resume(WorkflowId("external-package-test"), 1)
-      WorkflowRunner.run(workflow, ctx2).map { result2 =>
-        assertEquals(result2, WorkflowResult.Completed(43))
+      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+        assertEquals(result2, WorkflowSessionResult.Completed(ctx.workflowId, 43))
         assertEquals(computeCount, 0, "Should not recompute on replay - preprocessor should have wrapped val as activity")
       }
     }.flatten
@@ -59,9 +59,9 @@ class PreprocessorExternalPackageTest extends FunSuite:
     val workflow = ExternalCountdown(3)
     val ctx = RunContext.fresh(WorkflowId("external-countdown"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.ContinueAs(metadata, _, _) =>
+        case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assert(metadata.functionName.contains("ExternalCountdown"))
         case other =>
           fail(s"Expected ContinueAs, got $other")

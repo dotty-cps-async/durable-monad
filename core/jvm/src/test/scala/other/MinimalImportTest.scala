@@ -7,10 +7,10 @@ import cps.*
 // Minimal imports - only what's needed
 import durable.Durable
 import durable.MemoryBackingStore
-import durable.WorkflowRunner
+import durable.WorkflowSessionRunner
 import durable.RunContext
 import durable.WorkflowId
-import durable.WorkflowResult
+import durable.WorkflowSessionResult
 
 /**
  * Test that verifies the preprocessor works with minimal imports.
@@ -35,8 +35,8 @@ class MinimalImportTest extends FunSuite:
     }
 
     // First run - should compute and cache
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(43))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
       assertEquals(computeCount, 1)
       // Verify preprocessor cached the val as activity
       assert(backing.size > 0, "Preprocessor should create activities")

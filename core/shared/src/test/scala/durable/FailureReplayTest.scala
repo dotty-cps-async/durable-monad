@@ -27,10 +27,10 @@ class FailureReplayTest extends FunSuite:
     )
 
     val ctx = RunContext.fresh(WorkflowId("failure-store-1"), testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       // Workflow should fail
       result match
-        case WorkflowResult.Failed(e) =>
+        case WorkflowSessionResult.Failed(_, e) =>
           assertEquals(e.originalMessage, "test error")
         case other =>
           fail(s"Expected Failed, got $other")
@@ -61,9 +61,9 @@ class FailureReplayTest extends FunSuite:
 
     // Replay from index 1 (activity at index 0 should be replayed from cache)
     val ctx = RunContext.resume(WorkflowId("failure-replay-1"), 1, testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.Failed(e) =>
+        case WorkflowSessionResult.Failed(_, e) =>
           assert(e.isInstanceOf[ReplayedException], s"Expected ReplayedException, got ${e.getClass}")
           val re = e.asInstanceOf[ReplayedException]
           assertEquals(re.originalClassName, "java.lang.RuntimeException")
@@ -122,8 +122,8 @@ class FailureReplayTest extends FunSuite:
 
     // Replay from index 1
     val ctx = RunContext.resume(WorkflowId("failure-catch-1"), 1, testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
-      assertEquals(result, WorkflowResult.Completed(-1))
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, -1))
     }
   }
 
@@ -159,16 +159,17 @@ class FailureReplayTest extends FunSuite:
     }
 
     // First run - will fail and store failure, catch handles original exception
-    val ctx1 = RunContext.fresh(WorkflowId("catch-test"), testConfig)
-    WorkflowRunner.run(workflow, ctx1).flatMap { result1 =>
-      assertEquals(result1, WorkflowResult.Completed(-1))  // Caught original
+    val workflowId = WorkflowId("catch-test")
+    val ctx1 = RunContext.fresh(workflowId, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowSessionResult.Completed(workflowId, -1))  // Caught original
 
       shouldFail = false  // Won't matter - we're replaying from cache
 
       // Replay - should catch ReplayedException (transformed catch pattern matches it)
-      val ctx2 = RunContext.resume(WorkflowId("catch-test"), 1, testConfig)
-      WorkflowRunner.run(workflow, ctx2).map { result2 =>
-        assertEquals(result2, WorkflowResult.Completed(-1))  // Caught replayed
+      val ctx2 = RunContext.resume(workflowId, 1, testConfig)
+      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+        assertEquals(result2, WorkflowSessionResult.Completed(workflowId, -1))  // Caught replayed
       }
     }
   }
@@ -199,18 +200,19 @@ class FailureReplayTest extends FunSuite:
     }
 
     // First run - will fail and catch original exception
-    val ctx1 = RunContext.fresh(WorkflowId("handler-test"), testConfig)
-    WorkflowRunner.run(workflow, ctx1).flatMap { result1 =>
-      assertEquals(result1, WorkflowResult.Completed(14))  // "original error".length = 14
+    val workflowId = WorkflowId("handler-test")
+    val ctx1 = RunContext.fresh(workflowId, testConfig)
+    WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 14))  // "original error".length = 14
       assertEquals(capturedMessage, "original error")
 
       capturedMessage = ""  // Reset
       shouldFail = false  // Won't matter - replaying
 
       // Replay - e is ReplayedException but handler activity is cached
-      val ctx2 = RunContext.resume(WorkflowId("handler-test"), 2, testConfig)
-      WorkflowRunner.run(workflow, ctx2).map { result2 =>
-        assertEquals(result2, WorkflowResult.Completed(14))  // Same result - cached!
+      val ctx2 = RunContext.resume(workflowId, 2, testConfig)
+      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+        assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 14))  // Same result - cached!
         // Note: capturedMessage might be different on replay since e.getMessage
         // on ReplayedException returns "java.lang.RuntimeException: original error"
         // BUT the activity result (msg.length) is cached, so we get 14
@@ -233,10 +235,10 @@ class FailureReplayTest extends FunSuite:
 
     // Replay from index 2 (both should be replayed)
     val ctx = RunContext.resume(WorkflowId("seq-1"), 2, testConfig)
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       // Second activity's failure should propagate
       result match
-        case WorkflowResult.Failed(e: ReplayedException) =>
+        case WorkflowSessionResult.Failed(_, e: ReplayedException) =>
           assertEquals(e.originalClassName, "java.lang.RuntimeException")
           assertEquals(e.originalMessage, "second failed")
         case other =>

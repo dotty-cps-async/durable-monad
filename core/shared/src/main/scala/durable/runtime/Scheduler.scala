@@ -7,7 +7,7 @@ import scala.concurrent.duration.FiniteDuration
  * Scheduler abstraction for delayed execution.
  * Platform-specific implementations provided in companion object.
  *
- * This is an internal runtime component used by WorkflowRunner
+ * This is an internal runtime component used by WorkflowSessionRunner
  * for retry delays.
  */
 trait Scheduler:

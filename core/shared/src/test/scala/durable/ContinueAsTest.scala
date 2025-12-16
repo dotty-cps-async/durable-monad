@@ -40,10 +40,10 @@ class ContinueAsTest extends FunSuite:
     val workflow = CounterWorkflow(3)
     val ctx = RunContext.fresh(WorkflowId("test-continue-as-1"))
 
-    val result = WorkflowRunner.run(workflow, ctx).value.get.get
+    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
     result match
-      case WorkflowResult.ContinueAs(metadata, _, _) =>
+      case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
         assertEquals(metadata.functionName, "durable.ContinueAsTest.CounterWorkflow")
         assertEquals(metadata.argCount, 1)
         assertEquals(metadata.activityIndex, 1)
@@ -57,10 +57,10 @@ class ContinueAsTest extends FunSuite:
     val workflow = TransitionWorkflow(5)
     val ctx = RunContext.fresh(WorkflowId("test-transition-1"))
 
-    val result = WorkflowRunner.run(workflow, ctx).value.get.get
+    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
     result match
-      case WorkflowResult.ContinueAs(metadata, _, _) =>
+      case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
         assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")
         assertEquals(metadata.argCount, 1)
       case other =>
@@ -75,9 +75,9 @@ class ContinueAsTest extends FunSuite:
     val ctx = RunContext.fresh(workflowId)
 
     for
-      result <- WorkflowRunner.run(workflow, ctx)
+      result <- WorkflowSessionRunner.run(workflow, ctx)
       _ <- result match
-        case WorkflowResult.ContinueAs(_, storeArgs, _) =>
+        case WorkflowSessionResult.ContinueAs(_, storeArgs, _) =>
           for
             _ <- storeArgs(backing, workflowId, global)
             stored <- backing.forType[Int].retrieveStep(backing, workflowId, 0)
@@ -93,10 +93,10 @@ class ContinueAsTest extends FunSuite:
     val workflow = CounterWorkflow(0)
     val ctx = RunContext.fresh(WorkflowId("test-complete-1"))
 
-    val result = WorkflowRunner.run(workflow, ctx).value.get.get
+    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
     result match
-      case WorkflowResult.Completed(value) =>
+      case WorkflowSessionResult.Completed(_, value) =>
         assertEquals(value, 0)
       case other =>
         fail(s"Expected Completed, got $other")
@@ -162,9 +162,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = CountdownWithPreprocessor(3)
     val ctx = RunContext.fresh(WorkflowId("test-countdown-preprocessor"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.ContinueAs(metadata, _, _) =>
+        case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.CountdownWithPreprocessor")
           assertEquals(metadata.argCount, 1)
         case other =>
@@ -178,9 +178,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = CountdownWithPreprocessor(0)
     val ctx = RunContext.fresh(WorkflowId("test-countdown-zero"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.Completed(value) =>
+        case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, 0)
         case other =>
           fail(s"Expected Completed(0), got $other")
@@ -209,9 +209,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = AccumulatorWorkflow(3, 0)
     val ctx = RunContext.fresh(WorkflowId("test-accumulator"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.ContinueAs(metadata, _, nextWorkflow) =>
+        case WorkflowSessionResult.ContinueAs(metadata, _, nextWorkflow) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.AccumulatorWorkflow")
           assertEquals(metadata.argCount, 2)
           // nextWorkflow() should return the next iteration
@@ -244,9 +244,9 @@ class ContinueAsTest extends FunSuite:
     val workflowId = WorkflowId("test-process-continue")
     val ctx = RunContext.fresh(workflowId)
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.ContinueAs(metadata, storeArgs, _) =>
+        case WorkflowSessionResult.ContinueAs(metadata, storeArgs, _) =>
           // Verify activities were cached (preprocessor wraps multiple vals)
           // Expected: args extraction, processed string, condition
           assert(backing.size > 0, "Expected some activities to be cached")
@@ -263,9 +263,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = ProcessAndContinue(0)
     val ctx = RunContext.fresh(WorkflowId("test-process-complete"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.Completed(value) =>
+        case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, "step-0")
         case other =>
           fail(s"Expected Completed, got $other")
@@ -291,10 +291,10 @@ class ContinueAsTest extends FunSuite:
     val workflow = ExplicitTupleWorkflow(2)
     val ctx = RunContext.fresh(WorkflowId("test-explicit-tuple"))
 
-    val result = WorkflowRunner.run(workflow, ctx).value.get.get
+    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
     result match
-      case WorkflowResult.ContinueAs(metadata, _, _) =>
+      case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
         assertEquals(metadata.functionName, "durable.ContinueAsTest.ExplicitTupleWorkflow")
       case other =>
         fail(s"Expected ContinueAs, got $other")
@@ -325,9 +325,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = HandoffWorkflow(5)
     val ctx = RunContext.fresh(WorkflowId("test-handoff"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.ContinueAs(metadata, _, _) =>
+        case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")
           assertEquals(metadata.argCount, 1)
         case other =>
@@ -341,9 +341,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = HandoffWorkflow(0)
     val ctx = RunContext.fresh(WorkflowId("test-no-handoff"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.Completed(value) =>
+        case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, "no-handoff")
         case other =>
           fail(s"Expected Completed, got $other")
@@ -376,9 +376,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = StateA(10)
     val ctx = RunContext.fresh(WorkflowId("test-state-machine"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.ContinueAs(metadata, _, _) =>
+        case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.StateB")
           assertEquals(metadata.argCount, 2)
         case other =>
@@ -406,9 +406,9 @@ class ContinueAsTest extends FunSuite:
     val workflow = TraitMethodWorkflow(3)
     val ctx = RunContext.fresh(WorkflowId("test-trait-method"))
 
-    WorkflowRunner.run(workflow, ctx).map { result =>
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
-        case WorkflowResult.ContinueAs(metadata, _, _) =>
+        case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")
           assertEquals(metadata.argCount, 1)
         case other =>

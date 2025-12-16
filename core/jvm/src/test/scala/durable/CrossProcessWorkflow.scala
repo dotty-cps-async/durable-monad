@@ -60,10 +60,10 @@ object ProcessA:
     val workflow = CrossProcessWorkflow.apply(input)
     val ctx = RunContext.fresh(workflowId)
 
-    val result = Await.result(WorkflowRunner.run(workflow, ctx), 30.seconds)
+    val result = Await.result(WorkflowSessionRunner.run(workflow, ctx), 30.seconds)
 
     result match
-      case WorkflowResult.Suspended(snapshot, condition) =>
+      case WorkflowSessionResult.Suspended(snapshot, condition) =>
         println(s"[ProcessA] Workflow suspended at index ${snapshot.activityIndex}")
         println(s"[ProcessA] Waiting for: $condition")
 
@@ -78,15 +78,15 @@ object ProcessA:
 
         println(s"[ProcessA] Metadata saved. Exiting.")
 
-      case WorkflowResult.Completed(value) =>
+      case WorkflowSessionResult.Completed(_, value) =>
         println(s"[ProcessA] Workflow completed unexpectedly: $value")
         sys.exit(1)
 
-      case WorkflowResult.Failed(error) =>
+      case WorkflowSessionResult.Failed(_, error) =>
         println(s"[ProcessA] Workflow failed: ${error.getMessage}")
         sys.exit(1)
 
-      case WorkflowResult.ContinueAs(_, _, _) =>
+      case WorkflowSessionResult.ContinueAs(_, _, _) =>
         println(s"[ProcessA] Workflow requested continueAs unexpectedly")
         sys.exit(1)
 
@@ -148,10 +148,10 @@ object ProcessB:
 
     println(s"[ProcessB] Resuming workflow from index ${metadata.activityIndex + 1}")
 
-    val result = Await.result(WorkflowRunner.run(workflow, ctx), 30.seconds)
+    val result = Await.result(WorkflowSessionRunner.run(workflow, ctx), 30.seconds)
 
     result match
-      case WorkflowResult.Completed(value) =>
+      case WorkflowSessionResult.Completed(_, value) =>
         println(s"[ProcessB] Workflow completed: $value")
 
         // Update metadata
@@ -159,15 +159,15 @@ object ProcessB:
           status = JsonWorkflowStatus.Completed
         ))
 
-      case WorkflowResult.Suspended(snapshot, condition) =>
+      case WorkflowSessionResult.Suspended(snapshot, condition) =>
         println(s"[ProcessB] Workflow suspended again at index ${snapshot.activityIndex}")
         sys.exit(1)
 
-      case WorkflowResult.Failed(error) =>
+      case WorkflowSessionResult.Failed(_, error) =>
         println(s"[ProcessB] Workflow failed: ${error.getMessage}")
         error.printStackTrace()
         sys.exit(1)
 
-      case WorkflowResult.ContinueAs(_, _, _) =>
+      case WorkflowSessionResult.ContinueAs(_, _, _) =>
         println(s"[ProcessB] Workflow requested continueAs unexpectedly")
         sys.exit(1)

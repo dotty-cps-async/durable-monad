@@ -35,19 +35,19 @@ private[durable] enum StackFrame:
  * Each Activity captures its own DurableStorage, so the runner
  * doesn't need storage - it only needs workflowId and resumeFromIndex.
  */
-object WorkflowRunner:
+object WorkflowSessionRunner:
 
   /**
    * Run a workflow to completion or suspension.
    *
    * @param workflow The Durable workflow to run
    * @param ctx The execution context (workflowId, replay state)
-   * @return WorkflowResult - Completed, Suspended, or Failed
+   * @return WorkflowSessionResult - Completed, Suspended, or Failed
    */
   def run[A](
     workflow: Durable[A],
     ctx: RunContext
-  )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
     val state = new InterpreterState(ctx.resumeFromIndex, ctx.activityOffset)
     stepsUntilSuspend[A](workflow, ctx, state, Nil)
 
@@ -96,7 +96,7 @@ object WorkflowRunner:
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
     current match
       case Durable.Pure(value) =>
         continueWith(Success(value), ctx, state, stack)
@@ -122,11 +122,11 @@ object WorkflowRunner:
       case continueAs: Durable.ContinueAs[a] =>
         // ContinueAs is a terminal operation - return result for engine to handle
         // Type a = A by GADT refinement, cast is safe
-        Future.successful(WorkflowResult.ContinueAs(
+        Future.successful(WorkflowSessionResult.ContinueAs(
           continueAs.metadata,
           continueAs.storeArgs,
           continueAs.workflow
-        ).asInstanceOf[WorkflowResult[A]])
+        ).asInstanceOf[WorkflowSessionResult[A]])
 
   /**
    * Continue with a result (success or failure), applying the next continuation from the stack.
@@ -137,18 +137,18 @@ object WorkflowRunner:
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
     (result, stack) match
       // End of stack with success
       case (Success(value), Nil) =>
-        Future.successful(WorkflowResult.Completed(value.asInstanceOf[A]))
+        Future.successful(WorkflowSessionResult.Completed(ctx.workflowId, value.asInstanceOf[A]))
 
       // End of stack with failure - workflow fails (wrap in ReplayedException for consistent API)
       case (Failure(error), Nil) =>
         val wrapped = error match
           case re: ReplayedException => re
           case e => ReplayedException(e)
-        Future.successful(WorkflowResult.Failed(wrapped))
+        Future.successful(WorkflowSessionResult.Failed(ctx.workflowId, wrapped))
 
       // Success through normal continuation
       case (Success(value), StackFrame.Cont(f) :: rest) =>
@@ -189,7 +189,7 @@ object WorkflowRunner:
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
     try
       val result = compute(ctx)
       continueWith(Success(result), ctx, state, stack)
@@ -211,7 +211,7 @@ object WorkflowRunner:
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
     val compute = activity.compute
     val storage = activity.storage
     val policy = activity.retryPolicy
@@ -266,7 +266,7 @@ object WorkflowRunner:
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowResult[A]] =
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
     val condition = suspend.condition
     val storage = condition.getStorage
     val backend = ctx.backend.asInstanceOf[S]
@@ -292,7 +292,7 @@ object WorkflowRunner:
     else
       // Fresh run - suspend and return snapshot
       // The event value will be stored externally when the event occurs
-      Future.successful(WorkflowResult.Suspended(
+      Future.successful(WorkflowSessionResult.Suspended(
         DurableSnapshot(ctx.workflowId, index),
         condition
       ))
