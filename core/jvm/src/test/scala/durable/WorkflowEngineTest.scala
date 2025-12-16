@@ -172,21 +172,20 @@ class WorkflowEngineTest extends FunSuite:
     assertEquals(stored, Some(Right(42)))
   }
 
-  // Tests that require additional implementations - marked pending
-
-  test("sendEvent wakes suspended workflow".ignore) {
-    // Requires recreateAndResume implementation
+  test("sendEvent wakes suspended workflow") {
     val (storage, engine) = createEngine()
     given MemoryBackingStore = storage
     given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    // EventWorkflow awaits String events with name "test-signal"
+    given DurableEventName[String] = DurableEventName("test-signal")
 
     val result = for
       workflowId <- engine.start(EventWorkflow, Tuple1("hello"))
       // Wait for suspension
       _ <- Future(Thread.sleep(100))
       status1 <- engine.queryStatus(workflowId)
-      // Send event
-      _ <- engine.sendEvent(TestSignal("world"))
+      // Send String event (matching what EventWorkflow awaits)
+      _ <- engine.sendEvent("world")
       // Wait for completion
       _ <- Future(Thread.sleep(200))
       status2 <- engine.queryStatus(workflowId)
@@ -231,8 +230,7 @@ class WorkflowEngineTest extends FunSuite:
     assertEquals(queryResult, None)
   }
 
-  test("recover restores suspended workflows".ignore) {
-    // Requires full recover implementation
+  test("recover restores suspended workflows") {
     val storage = MemoryBackingStore()
     given MemoryBackingStore = storage
     given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
