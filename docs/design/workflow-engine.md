@@ -400,26 +400,50 @@ private def registerWaiter(workflowId: WorkflowId, condition: WaitCondition[?]):
 
 ## Concurrency Model
 
-### Coordinator Pattern
+### WorkflowStateCoordinator Pattern
 
-The engine uses a **Coordinator** to serialize all state-mutating operations, preventing race conditions between concurrent operations like `sendEvent` and `handleSuspended`.
+The engine uses a **WorkflowStateCoordinator** to serialize all state-mutating operations, preventing race conditions between concurrent operations like `sendEvent` and `handleSuspended`.
+
+Unlike a generic coordinator with `execute()` blocks, `WorkflowStateCoordinator` owns the state and exposes **named operations** that make the code self-documenting:
 
 ```scala
-trait Coordinator:
-  /** Execute operation on coordinator thread */
-  def execute[T](op: => T): Future[T]
+trait WorkflowStateCoordinator:
+  // === Registration ===
+  def registerWorkflow(id: WorkflowId, record: WorkflowRecord): Future[Unit]
+  def registerRunner(id: WorkflowId, runner: Future[WorkflowSessionResult[?]]): Future[Unit]
+  def registerTimer(id: WorkflowId, handle: TimerHandle): Future[Unit]
 
-  /** Execute async operation on coordinator thread */
-  def executeAsync[T](op: => Future[T]): Future[T]
+  // === State Transitions ===
+  def markFinished(id: WorkflowId): Future[Unit]  // completed or failed
+  def markSuspended(id: WorkflowId, activityIndex: Int, condition: EventQuery.Combined[?, ?]): Future[Unit]
+  def markResumed(id: WorkflowId, newActivityIndex: Int): Future[Option[WorkflowRecord]]
+  def updateForContinueAs(id: WorkflowId, metadata: WorkflowMetadata): Future[Unit]
 
-  /** Shutdown coordinator */
+  // === Queries with Actions ===
+  def findWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]]
+  def getAndRemoveTimer(id: WorkflowId): Future[Option[WorkflowRecord]]
+  def cancelWorkflow(id: WorkflowId): Future[Option[WorkflowRecord]]
+
+  // === Bulk Operations ===
+  def recoverWorkflows(records: Seq[WorkflowRecord]): Future[Unit]
+  def cancelAllTimers(): Future[Seq[TimerHandle]]
+
+  // === Read-Only (eventually consistent) ===
+  def getActive(id: WorkflowId): Option[WorkflowRecord]
+
   def shutdown(): Future[Unit]
 ```
 
+**Key design decisions:**
+- State lives inside the coordinator (not in WorkflowEngineImpl)
+- Named operations instead of generic `execute { ... }` blocks
+- `markSuspended` takes `EventQuery.Combined` and extracts fields internally
+- `markResumed` handles both timer and event resume (cancels any pending timer)
+
 **Platform implementations:**
-- **JVM**: `SingleThreadCoordinator` using a dedicated `ExecutorService`
-- **JS**: `NoOpCoordinator` (JavaScript is already single-threaded)
-- **Native**: `SingleThreadCoordinator` using a background thread with queue
+- **JVM**: `WorkflowStateCoordinatorImpl` using a dedicated `ExecutorService`
+- **JS**: `WorkflowStateCoordinatorImpl` (operations execute immediately - JS is single-threaded)
+- **Native**: `WorkflowStateCoordinatorImpl` using a background thread with queue
 
 ### Race Condition Prevention
 
@@ -431,41 +455,46 @@ Without coordination, the following race conditions can occur:
 | resumeFromTimer/cancel | Status check then act | Cancelled workflow resumes |
 | handleCompleted/sendEvent | Early state cleanup | Stale record usage |
 
-The Coordinator serializes these operations:
+The named operations serialize these:
 
 ```scala
 def sendEvent[E](event: E)(...): Future[Unit] =
-  coordinator.executeAsync {
-    // Sequential execution guaranteed within coordinator
-    val waitingWorkflows = state.activeWorkflows.filter { ... }
-    if waitingWorkflows.isEmpty then
+  for
+    // Sequential execution guaranteed
+    waitingWorkflows <- stateCoordinator.findWaitingForEvent(name)
+    _ <- if waitingWorkflows.isEmpty then
       storage.savePendingEvent(...)
     else
-      deliverToWorkflow(...)
-  }
+      for
+        _ <- storage.storeWinningCondition(...)
+        _ <- stateCoordinator.markResumed(target.id, activityIndex + 1)
+        // ...
+      yield ()
+  yield ()
 
 private def handleSuspended(...): Future[Unit] =
-  coordinator.executeAsync {
-    state.removeRunner(workflowId)
-    state.updateActive(...)  // Register as waiting
-    checkPendingEvents(...)   // Check for pending events
+  for
+    _ <- stateCoordinator.markSuspended(workflowId, activityIndex, condition)
+    pendingResult <- checkPendingEvents(...)
     // ...
-  }
+  yield ()
 ```
 
-### Operations Requiring Coordination
+### Named Operations
 
-| Operation | Needs Coordination | Reason |
-|-----------|-------------------|--------|
-| `sendEvent` | Yes | Reads/writes activeWorkflows, pending events |
-| `handleSuspended` | Yes | Mutates state, checks pending events |
-| `handleCompleted` | Yes | Removes from state maps |
-| `handleFailed` | Yes | Removes from state maps |
-| `resumeFromTimer` | Yes | Checks/updates state |
-| `cancel` | Yes | Multiple state removals |
-| `recover` | Yes | Bulk state loading |
-| `queryStatus` | No | Read-only (eventually consistent OK) |
-| `queryResult` | No | Read-only |
+| Operation | Purpose |
+|-----------|---------|
+| `registerWorkflow` | Add new workflow to active state |
+| `registerRunner` | Track running workflow's future |
+| `registerTimer` | Track timer handle for cancellation |
+| `markFinished` | Remove runner and active (completed/failed) |
+| `markSuspended` | Update to Suspended with wait condition |
+| `markResumed` | Cancel timer, update to Running |
+| `findWaitingForEvent` | Find suspended workflows waiting for event |
+| `getAndRemoveTimer` | Get suspended workflow, remove timer (for timer callback) |
+| `cancelWorkflow` | Cancel and remove workflow |
+| `recoverWorkflows` | Bulk register from storage recovery |
+| `cancelAllTimers` | Shutdown - cancel all pending timers |
 
 ### Future Optimizations
 
@@ -537,29 +566,29 @@ case class WorkflowEngineConfig(
 core/shared/src/main/scala/durable/
 ├── WorkflowEngine.scala              # Trait + companion object
 ├── WorkflowEnginePlatform.scala      # Platform factory trait
-├── WorkflowEngineState.scala         # In-memory state (indexes)
+├── WorkflowEngineState.scala         # State container (used by coordinator)
 ├── WorkflowEngineConfig.scala        # Configuration
 ├── WorkflowMetadata.scala            # Workflow record data classes
 └── engine/
-    ├── Coordinator.scala             # Coordinator trait
-    ├── TestHooks.scala               # Test instrumentation hooks
+    ├── WorkflowStateCoordinator.scala    # Coordinator trait with named operations
+    ├── TestHooks.scala                   # Test instrumentation hooks
     └── coordinator/
-        └── WorkflowEngineImpl.scala  # Coordinator-based implementation
+        └── WorkflowEngineImpl.scala      # Engine implementation using coordinator
 
 core/jvm/src/main/scala/durable/
-├── WorkflowEnginePlatform.scala      # JVM factory (uses SingleThreadCoordinator)
+├── WorkflowEnginePlatform.scala              # JVM factory
 └── engine/
-    └── SingleThreadCoordinator.scala # JVM coordinator implementation
+    └── WorkflowStateCoordinatorImpl.scala    # JVM: single-threaded ExecutorService
 
 core/js/src/main/scala/durable/
-├── WorkflowEnginePlatform.scala      # JS factory (uses NoOpCoordinator)
+├── WorkflowEnginePlatform.scala              # JS factory
 └── engine/
-    └── NoOpCoordinator.scala         # JS no-op coordinator
+    └── WorkflowStateCoordinatorImpl.scala    # JS: immediate execution (single-threaded)
 
 core/native/src/main/scala/durable/
-├── WorkflowEnginePlatform.scala      # Native factory (uses SingleThreadCoordinator)
+├── WorkflowEnginePlatform.scala              # Native factory
 └── engine/
-    └── SingleThreadCoordinator.scala # Native coordinator implementation
+    └── WorkflowStateCoordinatorImpl.scala    # Native: background thread with queue
 ```
 
 Note: Persistence uses `DurableStorageBackend` - no separate persistence layer needed.
