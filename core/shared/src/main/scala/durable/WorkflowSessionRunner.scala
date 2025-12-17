@@ -255,7 +255,7 @@ object WorkflowSessionRunner:
 
   /**
    * Handle Suspend - assign index, check cache for replay, otherwise suspend.
-   * Storage is extracted from the WaitCondition.
+   * Uses storageForCondition to get the right storage based on which condition won.
    * Type parameter S is the storage backend type.
    *
    * On replay (index < resumeFromIndex), the event value should be cached.
@@ -268,23 +268,31 @@ object WorkflowSessionRunner:
     stack: List[StackFrame]
   )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
     val condition = suspend.condition
-    val storage = condition.getStorage
     val backend = ctx.backend.asInstanceOf[S]
     // Assign index at runtime (like Activity)
     val index = state.nextIndex()
 
     if state.isReplayingAt(index) then
-      // Replaying - retrieve event value from cache
-      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
-        case Some(Right(cached)) =>
-          // Cached event value - continue with it
-          continueWith(Success(cached), ctx, state, stack)
-        case Some(Left(storedFailure)) =>
-          // Cached failure - replay as ReplayedException
-          continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
+      // Replaying - look up which condition won, then retrieve value with that storage
+      backend.retrieveWinningCondition(ctx.workflowId, index).flatMap {
+        case Some(winning) =>
+          val storage = condition.storageForCondition(winning)
+            .getOrElse(throw RuntimeException(s"No storage for winning condition $winning"))
+          storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
+            case Some(Right(cached)) =>
+              // Cached event value - continue with it
+              continueWith(Success(cached), ctx, state, stack)
+            case Some(Left(storedFailure)) =>
+              // Cached failure - replay as ReplayedException
+              continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
+            case None =>
+              continueWith(Failure(
+                RuntimeException(s"Missing cached event value for suspend at index=$index during replay")
+              ), ctx, state, stack)
+          }
         case None =>
           continueWith(Failure(
-            RuntimeException(s"Missing cached event value for suspend at index=$index during replay")
+            RuntimeException(s"Missing winning condition for suspend at index=$index during replay")
           ), ctx, state, stack)
       }.recoverWith { case e =>
         continueWith(Failure(e), ctx, state, stack)

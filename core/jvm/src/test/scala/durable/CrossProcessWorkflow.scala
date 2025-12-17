@@ -138,6 +138,12 @@ object ProcessB:
     // Store the event value at the suspend point index
     // This simulates the event being delivered
     println(s"[ProcessB] Storing event value '$eventValue' at index ${metadata.activityIndex}")
+    // Store winning condition first (required for replay)
+    Await.result(
+      storage.storeWinningCondition(workflowId, metadata.activityIndex, SingleEvent("continue-signal")),
+      5.seconds
+    )
+    // Then store the event value
     Await.result(
       storage.forType[String].storeStep(storage, workflowId, metadata.activityIndex, eventValue),
       5.seconds

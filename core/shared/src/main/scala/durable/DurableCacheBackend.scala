@@ -27,15 +27,32 @@ trait DurableStorageBackend:
   /** Update workflow status only */
   def updateWorkflowStatus(workflowId: WorkflowId, status: WorkflowStatus): Future[Unit]
 
-  /** Update workflow status and wait condition */
+  /** Update workflow status and wait condition (simple fields, not Combined) */
   def updateWorkflowStatusAndCondition(
     workflowId: WorkflowId,
     status: WorkflowStatus,
-    waitCondition: Option[WaitCondition[?, ?]]
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
   ): Future[Unit]
 
   /** List all active (Running or Suspended) workflows */
   def listActiveWorkflows(): Future[Seq[WorkflowRecord]]
+
+  // Combined query: winning condition tracking for replay
+
+  /** Store which condition fired for a combined query (for replay) */
+  def storeWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winning: SingleEventQuery[?]
+  ): Future[Unit]
+
+  /** Retrieve which condition fired (for replay) */
+  def retrieveWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int
+  ): Future[Option[SingleEventQuery[?]]]
 
   // Engine: pending events operations
 

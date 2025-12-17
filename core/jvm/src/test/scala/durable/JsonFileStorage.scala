@@ -53,12 +53,53 @@ class JsonFileStorage(val baseDir: Path) extends DurableStorageBackend:
   def updateWorkflowStatusAndCondition(
     workflowId: WorkflowId,
     status: WorkflowStatus,
-    waitCondition: Option[WaitCondition[?, ?]]
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
   ): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
 
   def listActiveWorkflows(): Future[Seq[WorkflowRecord]] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  private def winningConditionFile(workflowId: WorkflowId, index: Int): Path =
+    workflowDir(workflowId).resolve(s"winning-condition-$index.json")
+
+  def storeWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winning: SingleEventQuery[?]
+  ): Future[Unit] =
+    val file = winningConditionFile(workflowId, activityIndex)
+    Files.createDirectories(file.getParent)
+    val serialized = winning match
+      case SingleEvent(name) => s"event:$name"
+      case TimerDuration(d) => s"timerDuration:${d.toMillis}"
+      case TimerInstant(i) => s"timerInstant:${i.toString}"
+      case WorkflowCompletion(id) => s"workflow:${id.value}"
+    Files.writeString(file, serialized, StandardCharsets.UTF_8)
+    Future.successful(())
+
+  def retrieveWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int
+  ): Future[Option[SingleEventQuery[?]]] =
+    val file = winningConditionFile(workflowId, activityIndex)
+    if Files.exists(file) then
+      val str = Files.readString(file, StandardCharsets.UTF_8)
+      val winning =
+        if str.startsWith("event:") then SingleEvent(str.stripPrefix("event:"))
+        else if str.startsWith("timerDuration:") then
+          TimerDuration(scala.concurrent.duration.Duration(str.stripPrefix("timerDuration:").toLong, "ms"))
+        else if str.startsWith("timerInstant:") then
+          TimerInstant(Instant.parse(str.stripPrefix("timerInstant:")))
+        else if str.startsWith("workflow:") then
+          WorkflowCompletion(WorkflowId(str.stripPrefix("workflow:")))
+        else
+          throw RuntimeException(s"Unknown winning condition: $str")
+      Future.successful(Some(winning))
+    else
+      Future.successful(None)
 
   def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))

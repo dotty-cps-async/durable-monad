@@ -92,8 +92,8 @@ class DurableBasicTest extends FunSuite:
     val durable = Durable.awaitEvent[String, MemoryBackingStore]
 
     durable match
-      case Durable.Suspend(WaitCondition.Event("test-event", _)) => () // ok - storage in condition
-      case _ => fail("Expected Suspend with Event condition")
+      case Durable.Suspend(combined) if combined.hasEvent("test-event") => () // ok - storage in Combined
+      case _ => fail("Expected Suspend with Combined condition containing test-event")
   }
 
   test("error creates Error node") {

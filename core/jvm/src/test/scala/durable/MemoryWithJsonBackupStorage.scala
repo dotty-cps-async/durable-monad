@@ -88,14 +88,21 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
   def updateWorkflowStatusAndCondition(
     workflowId: WorkflowId,
     status: WorkflowStatus,
-    waitCondition: Option[WaitCondition[?, ?]]
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
   ): Future[Unit] =
     workflows.get(workflowId.value).foreach { record =>
-      val (condType, condData) = waitCondition match
-        case Some(WaitCondition.Timer(wakeAt, _)) => (Some("Timer"), Some(wakeAt.toString))
-        case Some(WaitCondition.Event(name, _)) => (Some("Event"), Some(name))
-        case Some(WaitCondition.ChildWorkflow(childId, _, _)) => (Some("ChildWorkflow"), Some(childId.value))
-        case None => (None, None)
+      // Store simple condition info - no Complex serialization needed
+      val (condType, condData) =
+        if waitingForTimer.isDefined then
+          (Some("Timer"), waitingForTimer.map(_.toString))
+        else if waitingForEvents.nonEmpty then
+          (Some("Event"), Some(waitingForEvents.mkString(",")))
+        else if waitingForWorkflows.nonEmpty then
+          (Some("Workflow"), Some(waitingForWorkflows.map(_.value).mkString(",")))
+        else
+          (None, None)
       workflows.put(workflowId.value, record.copy(
         status = status.toString,
         waitConditionType = condType,
@@ -109,17 +116,65 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
     val active = workflows.values.filter { r =>
       r.status == "Running" || r.status == "Suspended"
     }.map { r =>
+      // Parse simple wait fields directly
+      val (waitingForEvents, waitingForTimer, waitingForWorkflows) =
+        (r.waitConditionType, r.waitConditionData) match
+          case (Some("Timer"), Some(timerStr)) =>
+            (Set.empty[String], Some(Instant.parse(timerStr)), Set.empty[WorkflowId])
+          case (Some("Event"), Some(eventNames)) =>
+            (eventNames.split(",").toSet, None, Set.empty[WorkflowId])
+          case (Some("Workflow"), Some(workflowIds)) =>
+            (Set.empty[String], None, workflowIds.split(",").map(WorkflowId(_)).toSet)
+          case _ =>
+            (Set.empty[String], None, Set.empty[WorkflowId])
       WorkflowRecord(
         id = WorkflowId(r.id),
         metadata = WorkflowMetadata(r.functionName, r.argCount, r.activityIndex),
         status = WorkflowStatus.valueOf(r.status),
-        waitCondition = parseWaitCondition(r.waitConditionType, r.waitConditionData),
+        waitingForEvents = waitingForEvents,
+        waitingForTimer = waitingForTimer,
+        waitingForWorkflows = waitingForWorkflows,
         parentId = r.parentId.map(WorkflowId(_)),
         createdAt = Instant.parse(r.createdAt),
         updatedAt = Instant.parse(r.updatedAt)
       )
     }.toSeq
     Future.successful(active)
+
+  // DurableStorageBackend: winning condition tracking for replay
+  // For this simple test storage, we store winning conditions in the activities map with a special key prefix
+
+  private val winningConditions = TrieMap.empty[(String, Int), String]
+
+  def storeWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winning: SingleEventQuery[?]
+  ): Future[Unit] =
+    val serialized = winning match
+      case SingleEvent(name) => s"event:$name"
+      case TimerDuration(d) => s"timerDuration:${d.toMillis}"
+      case TimerInstant(i) => s"timerInstant:${i.toString}"
+      case WorkflowCompletion(id) => s"workflow:${id.value}"
+    winningConditions.put((workflowId.value, activityIndex), serialized)
+    Future.successful(())
+
+  def retrieveWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int
+  ): Future[Option[SingleEventQuery[?]]] =
+    val result = winningConditions.get((workflowId.value, activityIndex)).map { str =>
+      if str.startsWith("event:") then SingleEvent(str.stripPrefix("event:"))
+      else if str.startsWith("timerDuration:") then
+        TimerDuration(scala.concurrent.duration.Duration(str.stripPrefix("timerDuration:").toLong, "ms"))
+      else if str.startsWith("timerInstant:") then
+        TimerInstant(Instant.parse(str.stripPrefix("timerInstant:")))
+      else if str.startsWith("workflow:") then
+        WorkflowCompletion(WorkflowId(str.stripPrefix("workflow:")))
+      else
+        throw RuntimeException(s"Unknown winning condition: $str")
+    }
+    Future.successful(result)
 
   def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit] =
     val events = pendingEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
@@ -139,36 +194,6 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
       if idx >= 0 then events.remove(idx)
     }
     Future.successful(())
-
-  // Update workflow record with wait condition
-  // Note: We only persist condition type and data, not storage (which is runtime-only)
-  def updateWorkflowRecord(workflowId: WorkflowId, waitCondition: Option[WaitCondition[?, ?]]): Future[Unit] =
-    workflows.get(workflowId.value).foreach { record =>
-      val (condType, condData) = waitCondition match
-        case Some(WaitCondition.Timer(wakeAt, _)) => (Some("Timer"), Some(wakeAt.toString))
-        case Some(WaitCondition.Event(name, _)) => (Some("Event"), Some(name))
-        case Some(WaitCondition.ChildWorkflow(childId, _, _)) => (Some("ChildWorkflow"), Some(childId.value))
-        case None => (None, None)
-      workflows.put(workflowId.value, record.copy(
-        waitConditionType = condType,
-        waitConditionData = condData,
-        updatedAt = Instant.now().toString
-      ))
-    }
-    Future.successful(())
-
-  // Parse wait condition from persisted data
-  // Note: Storage typeclass is not reconstructed (it's a runtime concern)
-  // The engine will use registry to get proper storage when resuming
-  private def parseWaitCondition(condType: Option[String], condData: Option[String]): Option[WaitCondition[?, ?]] =
-    (condType, condData) match
-      case (Some("Timer"), Some(wakeAtStr)) =>
-        Some(WaitCondition.Timer(Instant.parse(wakeAtStr), null))
-      case (Some("Event"), Some(eventName)) =>
-        Some(WaitCondition.Event(eventName, null))
-      case (Some("ChildWorkflow"), Some(childIdStr)) =>
-        Some(WaitCondition.ChildWorkflow(WorkflowId(childIdStr), null, null))
-      case _ => None
 
   // Backup/Restore
 
@@ -210,6 +235,7 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
     activities.clear()
     workflows.clear()
     pendingEvents.clear()
+    winningConditions.clear()
 
   /** Delete backup file */
   def deleteBackup(): Unit =
@@ -240,6 +266,7 @@ object MemoryWithJsonBackupStorage:
   given JsonValueCodec[Boolean] = JsonCodecMaker.make
   given JsonValueCodec[Double] = JsonCodecMaker.make
   given JsonValueCodec[Instant] = JsonCodecMaker.make
+  given JsonValueCodec[TimeReached] = JsonCodecMaker.make
 
   /**
    * Pure typeclass instance for DurableStorage.

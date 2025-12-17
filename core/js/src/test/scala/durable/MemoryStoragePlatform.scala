@@ -11,5 +11,6 @@ trait MemoryBackingStorePlatform:
       activityStore = mutable.HashMap.empty[(WorkflowId, Int), Either[StoredFailure, Any]],
       workflowRecords = mutable.HashMap.empty[WorkflowId, WorkflowRecord],
       pendingEvents = mutable.HashMap.empty[String, mutable.ArrayBuffer[PendingEvent[Any]]],
-      resultStore = mutable.HashMap.empty[WorkflowId, Any]
+      resultStore = mutable.HashMap.empty[WorkflowId, Any],
+      winningConditions = mutable.HashMap.empty[(WorkflowId, Int), SingleEventQuery[?]]
     )

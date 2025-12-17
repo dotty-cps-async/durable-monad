@@ -59,9 +59,9 @@ trait WorkflowEngine[S <: DurableStorageBackend]:
 
 object WorkflowEngine extends WorkflowEnginePlatform:
   /** Create engine - type S inferred from storage argument */
-  def apply[S <: DurableStorageBackend](storage: S)(using ExecutionContext, DurableStorage[Instant, S]): WorkflowEngine[S] =
+  def apply[S <: DurableStorageBackend](storage: S)(using ExecutionContext, DurableStorage[TimeReached, S]): WorkflowEngine[S] =
     create(storage, WorkflowEngineConfig.default)
 
   /** Create engine with custom configuration */
-  def apply[S <: DurableStorageBackend](storage: S, config: WorkflowEngineConfig)(using ExecutionContext, DurableStorage[Instant, S]): WorkflowEngine[S] =
+  def apply[S <: DurableStorageBackend](storage: S, config: WorkflowEngineConfig)(using ExecutionContext, DurableStorage[TimeReached, S]): WorkflowEngine[S] =
     create(storage, config)

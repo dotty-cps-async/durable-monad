@@ -28,7 +28,9 @@ class MemoryBackingStore(
   // Pending events storage
   private val pendingEvents: mutable.Map[String, mutable.ArrayBuffer[PendingEvent[Any]]],
   // Workflow result storage - package private for typeclass access
-  private[durable] val resultStore: mutable.Map[WorkflowId, Any]
+  private[durable] val resultStore: mutable.Map[WorkflowId, Any],
+  // Winning condition storage for combined queries (for replay)
+  private val winningConditions: mutable.Map[(WorkflowId, Int), SingleEventQuery[?]]
 ) extends DurableStorageBackend:
 
   // DurableStorageBackend: activity storage
@@ -48,7 +50,9 @@ class MemoryBackingStore(
       id = workflowId,
       metadata = metadata,
       status = status,
-      waitCondition = None,
+      waitingForEvents = Set.empty,
+      waitingForTimer = None,
+      waitingForWorkflows = Set.empty,
       parentId = None,
       createdAt = now,
       updatedAt = now
@@ -69,12 +73,16 @@ class MemoryBackingStore(
   def updateWorkflowStatusAndCondition(
     workflowId: WorkflowId,
     status: WorkflowStatus,
-    waitCondition: Option[WaitCondition[?, ?]]
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
   ): Future[Unit] =
     workflowRecords.get(workflowId).foreach { record =>
       workflowRecords.put(workflowId, record.copy(
         status = status,
-        waitCondition = waitCondition,
+        waitingForEvents = waitingForEvents,
+        waitingForTimer = waitingForTimer,
+        waitingForWorkflows = waitingForWorkflows,
         updatedAt = Instant.now()
       ))
     }
@@ -85,6 +93,22 @@ class MemoryBackingStore(
       r.status == WorkflowStatus.Running || r.status == WorkflowStatus.Suspended
     }.toSeq
     Future.successful(active)
+
+  // DurableStorageBackend: winning condition tracking for replay
+
+  def storeWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winning: SingleEventQuery[?]
+  ): Future[Unit] =
+    winningConditions.put((workflowId, activityIndex), winning)
+    Future.successful(())
+
+  def retrieveWinningCondition(
+    workflowId: WorkflowId,
+    activityIndex: Int
+  ): Future[Option[SingleEventQuery[?]]] =
+    Future.successful(winningConditions.get((workflowId, activityIndex)))
 
   // DurableStorageBackend: pending events
 
@@ -127,6 +151,7 @@ class MemoryBackingStore(
     workflowRecords.clear()
     pendingEvents.clear()
     resultStore.clear()
+    winningConditions.clear()
 
   def size: Int = activityStore.size
 

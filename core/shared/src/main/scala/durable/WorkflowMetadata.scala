@@ -37,16 +37,35 @@ enum WorkflowStatus:
 
 /**
  * Full workflow record for persistence and in-memory cache.
+ *
+ * Wait condition info is stored as simple fields (not the full Combined)
+ * since we only need to know what we're waiting for, not the storage types.
  */
 case class WorkflowRecord(
   id: WorkflowId,
   metadata: WorkflowMetadata,
   status: WorkflowStatus,
-  waitCondition: Option[WaitCondition[?, ?]],
+  // Simple wait condition fields (no need to serialize Combined)
+  waitingForEvents: Set[String],
+  waitingForTimer: Option[Instant],
+  waitingForWorkflows: Set[WorkflowId],
   parentId: Option[WorkflowId],
   createdAt: Instant,
   updatedAt: Instant
-)
+):
+  /** Check if waiting for a specific event */
+  def isWaitingForEvent(name: String): Boolean = waitingForEvents.contains(name)
+
+  /** Check if waiting for any condition */
+  def isWaiting: Boolean =
+    waitingForEvents.nonEmpty || waitingForTimer.isDefined || waitingForWorkflows.nonEmpty
+
+  /** Clear all wait conditions */
+  def clearWaitConditions: WorkflowRecord = copy(
+    waitingForEvents = Set.empty,
+    waitingForTimer = None,
+    waitingForWorkflows = Set.empty
+  )
 
 /**
  * Unique identifier for pending events.

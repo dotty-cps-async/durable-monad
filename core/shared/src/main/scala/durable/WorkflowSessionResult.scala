@@ -39,7 +39,7 @@ enum WorkflowSessionResult[+A]:
   case Completed(workflowId: WorkflowId, value: A) extends WorkflowSessionResult[A] with WorkflowResult[A]
 
   /** Workflow suspended, waiting for external input */
-  case Suspended[S <: DurableStorageBackend](snapshot: DurableSnapshot, condition: WaitCondition[?, S]) extends WorkflowSessionResult[Nothing]
+  case Suspended[S <: DurableStorageBackend](snapshot: DurableSnapshot, condition: EventQuery.Combined[?, S]) extends WorkflowSessionResult[Nothing]
 
   /** Workflow failed with an error (always wrapped in ReplayedException for consistent API) */
   case Failed(workflowId: WorkflowId, error: ReplayedException) extends WorkflowSessionResult[Nothing] with WorkflowResult[Nothing]

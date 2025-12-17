@@ -496,7 +496,7 @@ This ensures:
 - Storage type `S` is tracked but doesn't pollute the monad type - user writes `Durable[A]`
 - Storage provided via universal given pattern
 
-### Runtime Interpreter (WorkflowRunner)
+### Runtime Interpreter (WorkflowSessionRunner)
 
 The interpreter tracks activity index and handles replay.
 Each Activity carries its own `DurableStorage[A, S]`:
@@ -507,7 +507,7 @@ case class RunContext(
   resumeFromIndex: Int
 )
 
-object WorkflowRunner {
+object WorkflowSessionRunner {
   private class InterpreterState(val resumeFromIndex: Int) {
     private var _currentIndex: Int = 0
 
@@ -628,11 +628,11 @@ given [T: JsonCodec]: DurableStorage[T, PostgresBackingStore] = backing.forType[
 // Future is the base async primitive (standard Scala)
 // DurableStorageBackend provides workflow-level operations
 // DurableStorage[T, S] uses Future for async storage operations
-// WorkflowRunner interprets Durable monad and uses captured storage
+// WorkflowSessionRunner interprets Durable monad and uses captured storage
 // Durable monad is the user-facing API
 
-Future  ←──  DurableStorageBackend  ←──  DurableStorage[T, S]  ←──  WorkflowRunner  ←──  Durable[A]
-(base)       (backend trait)             (typed storage)            (interpreter)        (user API)
+Future  ←──  DurableStorageBackend  ←──  DurableStorage[T, S]  ←──  WorkflowSessionRunner  ←──  Durable[A]
+(base)       (backend trait)             (typed storage)                 (interpreter)            (user API)
 ```
 
 `A ← B` means "B depends on A" / "B uses A"

@@ -2,9 +2,9 @@
 
 ## Overview
 
-WorkflowEngine is the orchestration layer that manages multiple concurrent workflows. While `WorkflowRunner` interprets a single `Durable[A]` computation, `WorkflowEngine` handles the full lifecycle of many workflows: starting, suspending, resuming, event delivery, child workflow coordination, and persistence.
+WorkflowEngine is the orchestration layer that manages multiple concurrent workflows. While `WorkflowSessionRunner` interprets a single `Durable[A]` computation, `WorkflowEngine` handles the full lifecycle of many workflows: starting, suspending, resuming, event delivery, child workflow coordination, and persistence.
 
-## Architecture: WorkflowRunner vs WorkflowEngine
+## Architecture: WorkflowSessionRunner vs WorkflowEngine
 
 ### Separation of Concerns
 
@@ -18,18 +18,18 @@ WorkflowEngine is the orchestration layer that manages multiple concurrent workf
 │  - Child workflow coordination                              │
 │  - Persistence & recovery                                   │
 │                                                             │
-│  ┌──────────────────────┐  ┌──────────────────────┐        │
-│  │   WorkflowRunner     │  │   WorkflowRunner     │  ...   │
-│  │  (interprets one     │  │  (interprets one     │        │
-│  │   Durable[A])        │  │   Durable[B])        │        │
-│  └──────────────────────┘  └──────────────────────┘        │
+│  ┌───────────────────────────┐  ┌───────────────────────────┐        │
+│  │   WorkflowSessionRunner   │  │   WorkflowSessionRunner   │  ...   │
+│  │  (interprets one          │  │  (interprets one          │        │
+│  │   Durable[A])             │  │   Durable[B])             │        │
+│  └───────────────────────────┘  └───────────────────────────┘        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**WorkflowRunner** (keep unchanged):
+**WorkflowSessionRunner** (keep unchanged):
 - Pure interpreter for `Durable[A]` monad
 - Executes activities with caching and retry
-- Returns `WorkflowResult[A]`: Completed, Suspended, Failed, ContinueAs
+- Returns `WorkflowSessionResult[A]`: Completed, Suspended, Failed, ContinueAs
 - Stateless beyond a single run (activity index counter)
 - No knowledge of other workflows or events
 
@@ -219,7 +219,7 @@ case class WorkflowRecord(
 4. For each waiting workflow:
    - Store event value at workflow's current activity index
    - Mark workflow as Running
-   - Resume via `WorkflowRunner.run(workflow, ctx)`
+   - Resume via `WorkflowSessionRunner.run(workflow, ctx)`
 5. Apply `DurableEventConfig[E]` semantics:
    - `consumeOnRead`: Remove event after first delivery vs broadcast to all
    - `deliveryMode`: Which workflows see the event
@@ -353,7 +353,7 @@ def recover(): Future[RecoveryReport] =
   yield RecoveryReport(...)
 ```
 
-## WorkflowRunner Integration
+## WorkflowSessionRunner Integration
 
 ### Resume Flow
 
@@ -364,7 +364,7 @@ private def runWorkflow[A](
   resumeFrom: Int
 ): Future[Unit] =
   val ctx = RunContext(workflowId, resumeFrom, config)
-  WorkflowRunner.run(workflow, ctx).flatMap {
+  WorkflowSessionRunner.run(workflow, ctx).flatMap {
     case WorkflowResult.Completed(value) =>
       markSucceeded(workflowId, value)
 
@@ -400,26 +400,81 @@ private def registerWaiter(workflowId: WorkflowId, condition: WaitCondition[?]):
 
 ## Concurrency Model
 
-All platforms use the same model: state mutations sequenced through `Future` chaining on `ExecutionContext`.
+### Coordinator Pattern
+
+The engine uses a **Coordinator** to serialize all state-mutating operations, preventing race conditions between concurrent operations like `sendEvent` and `handleSuspended`.
 
 ```scala
-class WorkflowEngineImpl[S <: DurableStorageBackend](
-  val storage: S,
-  config: WorkflowEngineConfig
-)(using ec: ExecutionContext) extends WorkflowEngine[S]:
-  private val state = new WorkflowEngineState()
+trait Coordinator:
+  /** Execute operation on coordinator thread */
+  def execute[T](op: => T): Future[T]
 
-  // All operations return Future, mutations sequenced via flatMap
-  def start[Args <: Tuple, R](...): Future[WorkflowId] =
-    for
-      id <- generateId(...)
-      _ <- storage.saveWorkflowMetadata(id, ...)
-      _ = state.active += (id -> record)  // in-memory update
-      _ <- runWorkflow(id, ...)
-    yield id
+  /** Execute async operation on coordinator thread */
+  def executeAsync[T](op: => Future[T]): Future[T]
+
+  /** Shutdown coordinator */
+  def shutdown(): Future[Unit]
 ```
 
-No locks or actors needed - `Future` composition ensures sequential state access.
+**Platform implementations:**
+- **JVM**: `SingleThreadCoordinator` using a dedicated `ExecutorService`
+- **JS**: `NoOpCoordinator` (JavaScript is already single-threaded)
+- **Native**: `SingleThreadCoordinator` using a background thread with queue
+
+### Race Condition Prevention
+
+Without coordination, the following race conditions can occur:
+
+| Race | Operations | Result |
+|------|------------|--------|
+| sendEvent/handleSuspended | Check-then-act on activeWorkflows | Lost event or stuck workflow |
+| resumeFromTimer/cancel | Status check then act | Cancelled workflow resumes |
+| handleCompleted/sendEvent | Early state cleanup | Stale record usage |
+
+The Coordinator serializes these operations:
+
+```scala
+def sendEvent[E](event: E)(...): Future[Unit] =
+  coordinator.executeAsync {
+    // Sequential execution guaranteed within coordinator
+    val waitingWorkflows = state.activeWorkflows.filter { ... }
+    if waitingWorkflows.isEmpty then
+      storage.savePendingEvent(...)
+    else
+      deliverToWorkflow(...)
+  }
+
+private def handleSuspended(...): Future[Unit] =
+  coordinator.executeAsync {
+    state.removeRunner(workflowId)
+    state.updateActive(...)  // Register as waiting
+    checkPendingEvents(...)   // Check for pending events
+    // ...
+  }
+```
+
+### Operations Requiring Coordination
+
+| Operation | Needs Coordination | Reason |
+|-----------|-------------------|--------|
+| `sendEvent` | Yes | Reads/writes activeWorkflows, pending events |
+| `handleSuspended` | Yes | Mutates state, checks pending events |
+| `handleCompleted` | Yes | Removes from state maps |
+| `handleFailed` | Yes | Removes from state maps |
+| `resumeFromTimer` | Yes | Checks/updates state |
+| `cancel` | Yes | Multiple state removals |
+| `recover` | Yes | Bulk state loading |
+| `queryStatus` | No | Read-only (eventually consistent OK) |
+| `queryResult` | No | Read-only |
+
+### Future Optimizations
+
+If the single coordinator becomes a bottleneck:
+
+1. **Sharded Coordinators**: Partition by event name or workflow ID
+2. **Versioned State**: Use CAS operations with version numbers for optimistic concurrency
+
+See `docs/brainshtorm/race-conditions-debug.md` for detailed analysis.
 
 ## Error Handling
 
@@ -464,7 +519,7 @@ case class WorkflowEngineConfig(
 
 ## Summary: Division of Responsibilities
 
-| Aspect | WorkflowRunner | WorkflowEngine |
+| Aspect | WorkflowSessionRunner | WorkflowEngine |
 |--------|---------------|----------------|
 | Scope | Single workflow | Multiple workflows |
 | State | Activity index counter | Workflow instances, indexes |
@@ -480,23 +535,31 @@ case class WorkflowEngineConfig(
 
 ```
 core/shared/src/main/scala/durable/
-├── WorkflowEngine.scala           # Trait + companion object
-├── WorkflowEnginePlatform.scala   # Platform factory trait
-├── WorkflowEngineState.scala      # In-memory state (indexes)
-├── WorkflowEngineConfig.scala     # Configuration
-└── WorkflowInstance.scala         # Instance data class
+├── WorkflowEngine.scala              # Trait + companion object
+├── WorkflowEnginePlatform.scala      # Platform factory trait
+├── WorkflowEngineState.scala         # In-memory state (indexes)
+├── WorkflowEngineConfig.scala        # Configuration
+├── WorkflowMetadata.scala            # Workflow record data classes
+└── engine/
+    ├── Coordinator.scala             # Coordinator trait
+    ├── TestHooks.scala               # Test instrumentation hooks
+    └── coordinator/
+        └── WorkflowEngineImpl.scala  # Coordinator-based implementation
 
 core/jvm/src/main/scala/durable/
-├── WorkflowEnginePlatform.scala   # JVM factory
-└── WorkflowEngineJvm.scala        # JVM implementation
+├── WorkflowEnginePlatform.scala      # JVM factory (uses SingleThreadCoordinator)
+└── engine/
+    └── SingleThreadCoordinator.scala # JVM coordinator implementation
 
 core/js/src/main/scala/durable/
-├── WorkflowEnginePlatform.scala   # JS factory
-└── WorkflowEngineJs.scala         # JS implementation
+├── WorkflowEnginePlatform.scala      # JS factory (uses NoOpCoordinator)
+└── engine/
+    └── NoOpCoordinator.scala         # JS no-op coordinator
 
 core/native/src/main/scala/durable/
-├── WorkflowEnginePlatform.scala   # Native factory
-└── WorkflowEngineNative.scala     # Native implementation
+├── WorkflowEnginePlatform.scala      # Native factory (uses SingleThreadCoordinator)
+└── engine/
+    └── SingleThreadCoordinator.scala # Native coordinator implementation
 ```
 
 Note: Persistence uses `DurableStorageBackend` - no separate persistence layer needed.

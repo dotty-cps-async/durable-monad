@@ -60,11 +60,12 @@ enum Durable[A]:
   ) extends Durable[A]
 
   /**
-   * Suspend for external input - timer, event, child workflow, etc.
-   * Storage is captured in the WaitCondition for replay.
+   * Suspend for external input - timer, event, child workflow, or combined.
+   * All conditions are represented as EventQuery.Combined.
+   * Storage is captured in the Combined for replay.
    */
   case Suspend[A, S <: DurableStorageBackend](
-    condition: WaitCondition[A, S]
+    condition: EventQuery.Combined[A, S]
   ) extends Durable[A]
 
   /** Try/catch semantics - handles both success and failure of fa */
@@ -124,21 +125,29 @@ object Durable:
                      (using storage: DurableStorage[A, S]): Durable[A] =
     Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy)
 
-  /** Suspend the workflow with a wait condition (condition already contains storage) */
-  def suspend[A, S <: DurableStorageBackend](condition: WaitCondition[A, S]): Durable[A] =
+  /** Suspend the workflow with a combined query (condition already contains storage) */
+  def suspend[A, S <: DurableStorageBackend](condition: EventQuery.Combined[A, S]): Durable[A] =
     Suspend(condition)
 
   /** Sleep until a specific instant, returns actual wake time */
-  def sleepUntil[S <: DurableStorageBackend](wakeAt: Instant)(using storage: DurableStorage[Instant, S]): Durable[Instant] =
-    Suspend(WaitCondition.Timer(wakeAt, storage))
+  def sleepUntil[S <: DurableStorageBackend](wakeAt: Instant)(using storage: DurableStorage[TimeReached, S]): Durable[Instant] =
+    Suspend(EventQuery.Combined[TimeReached, S](
+      events = Map.empty,
+      timerAt = Some((wakeAt, storage)),
+      workflows = Map.empty
+    )).map(_.firedAt)
 
   /** Sleep for a duration, returns actual wake time */
-  def sleep[S <: DurableStorageBackend](duration: FiniteDuration)(using storage: DurableStorage[Instant, S]): Durable[Instant] =
+  def sleep[S <: DurableStorageBackend](duration: FiniteDuration)(using storage: DurableStorage[TimeReached, S]): Durable[Instant] =
     sleepUntil(Instant.now().plusMillis(duration.toMillis))
 
   /** Wait for a broadcast event of type E (requires explicit backend type) */
   def awaitEvent[E, S <: DurableStorageBackend](using eventName: DurableEventName[E], storage: DurableStorage[E, S]): Durable[E] =
-    Suspend(WaitCondition.Event(eventName.name, storage))
+    Suspend(EventQuery.Combined[E, S](
+      events = Map(eventName.name -> storage),
+      timerAt = None,
+      workflows = Map.empty
+    ))
 
   /**
    * Continue as a different workflow with the given arguments.
@@ -249,20 +258,24 @@ object Durable:
       ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
 
 /**
- * Event builder for cleaner await syntax with inferred backend type.
+ * Event query builder for cleaner await syntax with inferred backend type.
  *
  * Usage:
  * {{{
  * given DurableEventName[MyEvent] = ...
  * given backend: MemoryBackingStore = ...
  *
+ * // Single event
  * val event = await(Event[MyEvent].receive)
+ *
+ * // Combined with timeout
+ * val result = await((Event[MyEvent] | TimeReached.after(1.minute)).receive)
+ * result match
+ *   case e: MyEvent => handleEvent(e)
+ *   case t: TimeReached => handleTimeout()
  * }}}
  */
 object Event:
-  def apply[E](using eventName: DurableEventName[E]): EventBuilder[E] = EventBuilder(eventName)
-
-class EventBuilder[E](eventName: DurableEventName[E]):
-  /** Receive the event (backend type inferred from context) */
-  def receive[S <: DurableStorageBackend](using backend: S, storage: DurableStorage[E, S]): Durable[E] =
-    Durable.Suspend(WaitCondition.Event(eventName.name, storage))
+  /** Create an event query for the given event type */
+  def apply[E](using eventName: DurableEventName[E]): SingleEvent[E] =
+    SingleEvent(eventName.name)

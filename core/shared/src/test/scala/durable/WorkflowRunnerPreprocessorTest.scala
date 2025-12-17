@@ -256,9 +256,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]])
       assertEquals(beforeCount, 1)
       val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
-      suspended.condition match
-        case WaitCondition.Event(name, _) => assertEquals(name, "prep-signal")
-        case _ => fail("Expected Event condition")
+      assert(suspended.condition.hasEvent("prep-signal"), "Expected Event condition with prep-signal")
     }
   }
 
@@ -281,9 +279,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]])
       val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
-      suspended.condition match
-        case WaitCondition.Event(name, _) => assertEquals(name, "new-syntax-signal")
-        case _ => fail("Expected Event condition")
+      assert(suspended.condition.hasEvent("new-syntax-signal"), "Expected Event condition with new-syntax-signal")
     }
   }
 

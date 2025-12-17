@@ -244,8 +244,6 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]])
       val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
-      suspended.condition match
-        case WaitCondition.Event(name, _) => assertEquals(name, "test-signal")
-        case _ => fail("Expected Event condition")
+      assert(suspended.condition.hasEvent("test-signal"), "Expected Event condition with test-signal")
     }
   }
