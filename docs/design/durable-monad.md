@@ -101,6 +101,27 @@ async[Durable] {
 def httpGet(url: String): Response
 ```
 
+### 1b. Async Activities (outbound, parallel)
+
+Activities returning `Future[T]` (or other effect types with `DurableAsync`):
+
+```scala
+async[Durable] {
+  val r: Future[Int] = asyncFetch(url)  // starts immediately, returns Future
+  val x = compute()                      // runs IN PARALLEL with r
+  val result = await(r) + x              // wait for r HERE
+}
+```
+
+Key differences from sync activities:
+- Returns `Future[T]` immediately (no blocking at assignment)
+- Result `T` is cached when Future completes
+- On replay: returns `Future.successful(cachedValue)` if found, restarts activity if not found (handles engine restart during async execution)
+
+**Extensibility:** Async handling works for any monad `F[_]` by implementing the `DurableAsync[F]` typeclass. The preprocessor detects when `DurableAsync[F]` exists in scope and uses `activityAsync` instead of `activitySync`.
+
+See [Async Activities](async-activities.md) for full details.
+
 ### 2. External Calls (inbound)
 
 Operations where the workflow waits for something external to happen. Require `await` - we're waiting for input from outside.
@@ -125,7 +146,8 @@ async[Durable] {
 | Operation Type | Direction | Await? | On Replay | On Failure |
 |---------------|-----------|--------|-----------|------------|
 | Pure computation | - | No | Return cached | N/A |
-| Activity | Outbound | No | Return cached | Retry if recoverable |
+| Activity (sync) | Outbound | No | Return cached | Retry if recoverable |
+| Activity (async) | Outbound | No (at assignment) | Return cached or restart | Retry if recoverable |
 | External call | Inbound | Yes | Skip wait, return cached | Workflow-level handling |
 
 ## Cache Key Strategy
@@ -471,11 +493,6 @@ workflow-123/
   5: () (suspend result)
 ```
 
-### Why Single Index?
-
-- Simpler implementation - no need to track two counters
-- Deterministic during replay - same execution path = same indices
-- Resume uses `resumeFromIndex` to skip already-cached activities
 
 ### Activity Node Design
 

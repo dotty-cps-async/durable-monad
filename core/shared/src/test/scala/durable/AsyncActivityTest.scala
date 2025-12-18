@@ -18,7 +18,6 @@ class AsyncActivityTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import MemoryBackingStore.given
-  import DurableAsyncWrapper.given
 
   test("async activity caches Future result") {
     given backing: MemoryBackingStore = MemoryBackingStore()

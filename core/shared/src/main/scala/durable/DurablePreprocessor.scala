@@ -56,6 +56,23 @@ object DurablePreprocessor:
     def wrapWithActivity(expr: Term): Term =
       val exprType = widenAll(expr.tpe)
 
+      // Check if exprType is F[T] where DurableAsync[F] exists in scope
+      exprType match
+        case AppliedType(fType, List(tType)) =>
+          // Try to find DurableAsync[F] in scope
+          val wrapperType = TypeRepr.of[DurableAsync].appliedTo(fType)
+          Implicits.search(wrapperType) match
+            case iss: ImplicitSearchSuccess =>
+              // Use activityAsync for F[T] types with wrapper
+              wrapWithActivityAsync(expr, exprType, fType, tType)
+            case isf: ImplicitSearchFailure =>
+              // No wrapper available, use regular activitySync
+              wrapWithActivitySync(expr, exprType)
+        case _ =>
+          // Not an applied type, use regular activitySync
+          wrapWithActivitySync(expr, exprType)
+
+    def wrapWithActivitySync(expr: Term, exprType: TypeRepr): Term =
       // Build: ctx.activitySync[A, S](expr, RetryPolicy.default)
       // where S is the DurableStorageBackend type resolved earlier
       // DurableStorage[A, S] is resolved via normal given resolution
@@ -90,6 +107,46 @@ object DurablePreprocessor:
         )
       )
       // First apply: the value F[T]
+      val awaitApply1 = Apply(awaitWithTypes, List(activityCall))
+      // Second apply: the using parameters (ctx, conversion)
+      val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))
+      val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
+      Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
+
+    def wrapWithActivityAsync(expr: Term, exprType: TypeRepr, fType: TypeRepr, tType: TypeRepr): Term =
+      // Build: ctx.activityAsync[F, T, S](expr, RetryPolicy.default)
+      // where F is the effect type (e.g., Future), T is the inner type, S is the backend type
+      // DurableAsyncWrapper[F] and DurableStorage[T, S] are resolved via normal given resolution
+
+      // Get RetryPolicy.default
+      val retryPolicyModule = Symbol.requiredModule("durable.RetryPolicy")
+      val defaultPolicy = Select(Ref(retryPolicyModule), retryPolicyModule.fieldMember("default"))
+
+      // Build: ctx.activityAsync[F, T, S](expr, RetryPolicy.default)
+      val activityCall = Apply(
+        TypeApply(
+          Select.unique(ctx.asTerm, "activityAsync"),
+          List(
+            TypeTree.of(using fType.asType),
+            TypeTree.of(using tType.asType),
+            TypeTree.of(using backendType.asType)
+          )
+        ),
+        List(expr, defaultPolicy)
+      )
+
+      // Build: await[Durable, F[T], Durable](activityCall)(using ctx, identityConversion)
+      // This extracts F[T] from Durable[F[T]]
+      val awaitRef = Ref(Symbol.requiredMethod("cps.await"))
+      val awaitWithTypes = TypeApply(
+        awaitRef,
+        List(
+          TypeTree.of[Durable],
+          TypeTree.of(using exprType.asType),  // F[T]
+          TypeTree.of[Durable]
+        )
+      )
+      // First apply: the value Durable[F[T]]
       val awaitApply1 = Apply(awaitWithTypes, List(activityCall))
       // Second apply: the using parameters (ctx, conversion)
       val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))

@@ -10,7 +10,7 @@ import durable.runtime.Scheduler
 /**
  * Typeclass for wrapping async operations in durable workflows.
  *
- * When the preprocessor detects `val x: F[T] = expr` where F has a DurableAsyncWrapper,
+ * When the preprocessor detects `val x: F[T] = expr` where F has a DurableAsync,
  * it transforms to use activityAsync which delegates to this wrapper.
  *
  * The wrapper is responsible for:
@@ -22,7 +22,7 @@ import durable.runtime.Scheduler
  *
  * @tparam F the async monad type (e.g., Future)
  */
-trait DurableAsyncWrapper[F[_]]:
+trait DurableAsync[F[_]]:
   /**
    * Wrap an async operation for durable execution.
    *
@@ -48,7 +48,7 @@ trait DurableAsyncWrapper[F[_]]:
   )(using storage: DurableStorage[T, S], backend: S): F[T]
 
 
-object DurableAsyncWrapper:
+object DurableAsync:
 
   /**
    * Instance for Future - the primary use case.
@@ -66,7 +66,7 @@ object DurableAsyncWrapper:
    * - If storage fails, the Future fails (workflow fails)
    * - Return the chained Future (completes after both computation AND storage)
    */
-  given futureWrapper(using ec: ExecutionContext): DurableAsyncWrapper[Future] with
+  given futureWrapper(using ec: ExecutionContext): DurableAsync[Future] with
     def wrap[T, S <: DurableStorageBackend](
       op: () => Future[T],
       index: Int,

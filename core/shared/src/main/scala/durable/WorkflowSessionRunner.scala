@@ -116,6 +116,9 @@ object WorkflowSessionRunner:
       case activity: Durable.Activity[b, s] =>
         handleActivity[A, b, s](activity, ctx, state, stack)
 
+      case asyncActivity: Durable.AsyncActivity[f, t, s] =>
+        handleAsyncActivity[A, f, t, s](asyncActivity, ctx, state, stack)
+
       case suspend: Durable.Suspend[a, s] =>
         handleSuspend[A, a, s](suspend, ctx, state, stack)
 
@@ -304,6 +307,38 @@ object WorkflowSessionRunner:
         DurableSnapshot(ctx.workflowId, index),
         condition
       ))
+
+  /**
+   * Handle AsyncActivity - assign index, delegate to DurableAsync.
+   * Returns F[T] immediately (parallel execution preserved).
+   * Type parameter F is the async effect type (e.g., Future).
+   * Type parameter T is the result type that gets cached.
+   * Type parameter S is the storage backend type.
+   */
+  private def handleAsyncActivity[A, F[_], T, S <: DurableStorageBackend](
+    asyncActivity: Durable.AsyncActivity[F, T, S],
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+    val index = state.nextIndex()
+    val backend = ctx.backend.asInstanceOf[S]
+    given DurableStorage[T, S] = asyncActivity.storage
+    given S = backend
+
+    // Wrapper handles all logic: cache check, execution with retry, caching on completion
+    val resultF: F[T] = asyncActivity.wrapper.wrap(
+      asyncActivity.compute,
+      index,
+      ctx.workflowId,
+      state.isReplayingAt(index),
+      asyncActivity.retryPolicy,
+      ctx.config.scheduler,
+      ctx.config.retryLogger
+    )
+
+    // Continue IMMEDIATELY with F[T] (wrapper returns immediately)
+    continueWith(Success(resultF), ctx, state, stack)
 
   /**
    * Execute activity computation with retry logic.

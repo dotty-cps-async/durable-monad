@@ -85,6 +85,27 @@ enum Durable[A]:
     workflow: () => Durable[A]
   ) extends Durable[A]
 
+  /**
+   * Async activity - returns F[T] immediately, runs in parallel with subsequent code.
+   * Created during monad construction (by preprocessor or user code).
+   * Index is assigned at runtime by the interpreter.
+   *
+   * On interpretation:
+   *   - Runner assigns index (runtime counter)
+   *   - Delegates to DurableAsync.wrap which handles:
+   *     - Cache check (replay) or execution with retry (fresh run)
+   *     - Caching result when F completes
+   *   - Returns F[T] immediately (parallel execution preserved)
+   *
+   * Storage, retryPolicy, and wrapper are captured at creation time via given resolution.
+   */
+  case AsyncActivity[F[_], T, S <: DurableStorageBackend](
+    compute: () => F[T],
+    storage: DurableStorage[T, S],
+    retryPolicy: RetryPolicy,
+    wrapper: DurableAsync[F]
+  ) extends Durable[F[T]]
+
   def map[B](f: A => B): Durable[B] =
     Durable.FlatMap(this, (a: A) => Durable.Pure(f(a)))
 
@@ -124,6 +145,16 @@ object Durable:
   def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy = RetryPolicy.default)
                      (using storage: DurableStorage[A, S]): Durable[A] =
     Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy)
+
+  /**
+   * Create an async activity - returns F[T] immediately, runs in parallel.
+   * The result T is cached when F completes.
+   * Storage and wrapper are captured via given resolution.
+   * Policy defaults to RetryPolicy.default.
+   */
+  def activityAsync[F[_], T, S <: DurableStorageBackend](compute: => F[T], policy: RetryPolicy = RetryPolicy.default)
+                      (using wrapper: DurableAsync[F], storage: DurableStorage[T, S]): Durable[F[T]] =
+    AsyncActivity(() => compute, storage, policy, wrapper)
 
   /** Suspend the workflow with a combined query (condition already contains storage) */
   def suspend[A, S <: DurableStorageBackend](condition: EventQuery.Combined[A, S]): Durable[A] =
@@ -225,6 +256,16 @@ object Durable:
     def activity_async[A, S <: DurableStorageBackend](compute: () => Durable[Future[A]], policy: RetryPolicy)
                          (using storage: DurableStorage[A, S]): Durable[A] =
       compute().flatMap(fut => Durable.Activity(() => fut, storage, policy))
+
+    /**
+     * Create an async activity from an effect F[T].
+     * Used by preprocessor to wrap val definitions of type F[T].
+     * Returns F[T] immediately, runs in parallel with subsequent code.
+     * Takes explicit policy parameter - preprocessor passes RetryPolicy.default.
+     */
+    def activityAsync[F[_], T, S <: DurableStorageBackend](compute: => F[T], policy: RetryPolicy)
+                        (using wrapper: DurableAsync[F], storage: DurableStorage[T, S]): Durable[F[T]] =
+      Durable.AsyncActivity(() => compute, storage, policy, wrapper)
 
   /**
    * CpsTryMonad instance for async/await syntax.

@@ -28,12 +28,12 @@ Key properties:
 2. Run in **parallel** with subsequent code
 3. Cache the resolved result `T` when the Future completes
 
-## Solution: DurableAsyncWrapper[F[_]]
+## Solution: DurableAsync[F[_]]
 
 Abstract the wrapping logic to any monad via typeclass:
 
 ```scala
-trait DurableAsyncWrapper[F[_]]:
+trait DurableAsync[F[_]]:
   /**
    * Wrap an async operation for durable execution.
    *
@@ -95,7 +95,7 @@ def activityAsync[F[_], T, S <: DurableStorageBackend](
   compute: => F[T],
   policy: RetryPolicy = RetryPolicy.default
 )(using
-  wrapper: DurableAsyncWrapper[F],
+  wrapper: DurableAsync[F],
   storage: DurableStorage[T, S]
 ): Durable[F[T]] =
   AsyncActivity(() => compute, storage, policy, wrapper)
@@ -103,10 +103,10 @@ def activityAsync[F[_], T, S <: DurableStorageBackend](
 
 ## Preprocessor Transformation
 
-The CpsPreprocessor detects when `val x: F[T] = expr` where `DurableAsyncWrapper[F]` exists in scope:
+The CpsPreprocessor detects when `val x: F[T] = expr` where `DurableAsync[F]` exists in scope:
 
 1. Check if `exprType` is `AppliedType(fType, List(tType))`
-2. Search for `DurableAsyncWrapper[F]` in scope via `Implicits.search`
+2. Search for `DurableAsync[F]` in scope via `Implicits.search`
 3. If found: use `activityAsync`
 4. If not found: use existing `activitySync` path
 
@@ -129,11 +129,11 @@ Transforms:
 
 ## Extensibility
 
-Other effect types can implement `DurableAsyncWrapper`:
+Other effect types can implement `DurableAsync`:
 
 ```scala
 // Example: cats-effect IO
-given ioWrapper: DurableAsyncWrapper[IO] with
+given ioWrapper: DurableAsync[IO] with
   def wrap[T, S <: DurableStorageBackend](...): IO[T] =
     // IO-specific implementation
 ```
