@@ -86,6 +86,28 @@ case class RetryEvent(
   willRetry: Boolean
 )
 
+/**
+ * Exception thrown when all retry attempts are exhausted.
+ *
+ * @param workflowId The workflow instance ID
+ * @param activityIndex The activity index within the workflow
+ * @param attempts Number of attempts made
+ * @param maxAttempts Maximum attempts configured
+ * @param history List of retry events (chronological order)
+ * @param cause The last error that caused the final failure
+ */
+class MaxRetriesExceededException(
+  val workflowId: WorkflowId,
+  val activityIndex: Int,
+  val attempts: Int,
+  val maxAttempts: Int,
+  val history: List[RetryEvent],
+  cause: Throwable
+) extends Exception(
+  s"Max retries ($attempts/$maxAttempts) exceeded for activity $activityIndex in workflow ${workflowId.value}",
+  cause
+)
+
 /** Logger callback for retry events */
 type RetryLogger = RetryEvent => Unit
 

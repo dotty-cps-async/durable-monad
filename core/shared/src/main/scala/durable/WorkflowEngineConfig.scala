@@ -4,11 +4,9 @@ package durable
  * Configuration for WorkflowEngine.
  *
  * @param runConfig Configuration passed to WorkflowSessionRunner for each workflow
- * @param maxConcurrentWorkflows Maximum number of workflows running simultaneously
  */
 case class WorkflowEngineConfig(
-  runConfig: RunConfig = RunConfig.default,
-  maxConcurrentWorkflows: Int = 1000
+  runConfig: RunConfig = RunConfig.default
 )
 
 object WorkflowEngineConfig:

@@ -6,6 +6,12 @@ import java.time.Instant
 import durable.*
 
 /**
+ * Handle for a scheduled timer, allowing cancellation.
+ */
+trait TimerHandle:
+  def cancel(): Unit
+
+/**
  * Coordinator for workflow state operations.
  *
  * Owns the in-memory state and provides named operations that are

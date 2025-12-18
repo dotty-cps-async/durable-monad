@@ -145,16 +145,13 @@ All platforms use same model: state mutations sequenced through Futures, actual 
 
 ### In-Memory State
 
+State is managed by `WorkflowStateCoordinator`, which provides serialized access:
+
 ```scala
-class WorkflowEngineState:
-  // Active (non-terminal) workflows - cached to avoid storage reads
-  val active: Map[WorkflowId, WorkflowRecord]
-
-  // Running workflows - have active runner
-  val runners: Map[WorkflowId, Future[WorkflowResult[?]]]
-
-  // Scheduled timers
-  val scheduledTimers: Map[WorkflowId, TimerHandle]
+// State managed internally by WorkflowStateCoordinator:
+// - active: Map[WorkflowId, WorkflowRecord]     // Active (non-terminal) workflows
+// - runners: Map[WorkflowId, Future[...]]       // Running workflow futures
+// - timers: Map[WorkflowId, TimerHandle]        // Scheduled timer handles
 ```
 
 ### Persistent State (in DurableStorageBackend)
@@ -531,9 +528,6 @@ case class WorkflowEngineConfig(
   // Retry policy for engine-level operations
   storageRetryPolicy: RetryPolicy = RetryPolicy.default,
 
-  // Maximum concurrent workflow executions
-  maxConcurrentWorkflows: Int = 1000,
-
   // Timer precision (minimum delay)
   timerResolution: FiniteDuration = 100.millis,
 
@@ -566,11 +560,10 @@ case class WorkflowEngineConfig(
 core/shared/src/main/scala/durable/
 ├── WorkflowEngine.scala              # Trait + companion object
 ├── WorkflowEnginePlatform.scala      # Platform factory trait
-├── WorkflowEngineState.scala         # State container (used by coordinator)
 ├── WorkflowEngineConfig.scala        # Configuration
 ├── WorkflowMetadata.scala            # Workflow record data classes
 └── engine/
-    ├── WorkflowStateCoordinator.scala    # Coordinator trait with named operations
+    ├── WorkflowStateCoordinator.scala    # Coordinator trait with named operations + TimerHandle
     ├── TestHooks.scala                   # Test instrumentation hooks
     └── coordinator/
         └── WorkflowEngineImpl.scala      # Engine implementation using coordinator
@@ -598,7 +591,7 @@ Note: Persistence uses `DurableStorageBackend` - no separate persistence layer n
 1. Define `WorkflowEngine[S]` trait (shared)
 2. Define `WorkflowEnginePlatform` trait (shared)
 3. Extend `DurableStorageBackend` with workflow metadata methods
-4. Implement `WorkflowEngineState` (shared, in-memory indexes)
+4. Implement `WorkflowStateCoordinator` (shared trait, platform-specific impls)
 5. Implement `WorkflowEngineJvm` (JVM platform)
 6. Implement `WorkflowEngineJs` (JS platform)
 7. Implement `WorkflowEngineNative` (Native platform)

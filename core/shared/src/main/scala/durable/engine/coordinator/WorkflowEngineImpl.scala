@@ -5,15 +5,12 @@ import scala.util.{Success, Failure}
 import java.time.{Instant, Duration}
 
 import durable.*
-import durable.engine.{WorkflowStateCoordinator, TestHooks}
+import durable.engine.{WorkflowStateCoordinator, TestHooks, TimerHandle}
 import durable.runtime.Scheduler
 
 /**
  * WorkflowEngine implementation using WorkflowStateCoordinator.
- *
- * All state operations use named methods on the coordinator,
- * making the code more readable and the intent clearer.
- *
+ * 
  * @param storage The storage backend
  * @param stateCoordinator Manages workflow state with serialized access
  * @param timeReachedStorage Storage for TimeReached values (needed for timer support)
