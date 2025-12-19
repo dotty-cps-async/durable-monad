@@ -206,7 +206,7 @@ object WorkflowEngineProcessB:
     // Send event - TestEventPayload type matches workflow's awaitEvent[TestEventPayload]
     import TestEventPayload.given
     println(s"[ProcessB] Sending event with data: $eventData")
-    Await.result(engine.sendEvent(TestEventPayload(eventData)), 5.seconds)
+    Await.result(engine.sendEventBroadcast(TestEventPayload(eventData)), 5.seconds)
 
     // Wait for completion
     var status: Option[WorkflowStatus] = None

@@ -35,6 +35,11 @@ enum WorkflowStatus:
   case Failed      // finished with error
   case Cancelled   // externally cancelled
 
+  /** Check if this is a terminal state (no more transitions possible) */
+  def isTerminal: Boolean = this match
+    case Succeeded | Failed | Cancelled => true
+    case Running | Suspended => false
+
 /**
  * Full workflow record for persistence and in-memory cache.
  *
@@ -81,10 +86,51 @@ object EventId:
 
 /**
  * Event waiting to be delivered to a workflow.
+ *
+ * @param eventId Unique event identifier
+ * @param eventName Event type name
+ * @param value Event payload
+ * @param timestamp When event was sent
+ * @param onTargetTerminated Policy for handling if target workflow terminates (for targeted events)
  */
 case class PendingEvent[E](
   eventId: EventId,
   eventName: String,
   value: E,
+  timestamp: Instant,
+  onTargetTerminated: DeadLetterPolicy = DeadLetterPolicy.Discard
+)
+
+/**
+ * Exception thrown when sendEventTo targets a workflow that doesn't exist.
+ */
+case class WorkflowNotFoundException(workflowId: WorkflowId)
+  extends Exception(s"Workflow not found: ${workflowId.value}")
+
+/**
+ * Exception thrown when sendEventTo targets a workflow in terminal state.
+ */
+case class WorkflowTerminatedException(workflowId: WorkflowId, status: WorkflowStatus)
+  extends Exception(s"Workflow ${workflowId.value} is terminated with status: $status")
+
+/**
+ * Dead letter event - a targeted event that was not delivered because
+ * the target workflow terminated without reading it.
+ *
+ * @param eventId Unique event identifier
+ * @param eventName Event type name
+ * @param value Event payload
+ * @param originalTarget The workflow ID that was supposed to receive this event
+ * @param targetTerminatedAt When the target workflow terminated
+ * @param targetStatus Why it wasn't delivered (Succeeded/Failed/Cancelled)
+ * @param timestamp When the event was originally sent
+ */
+case class DeadEvent[E](
+  eventId: EventId,
+  eventName: String,
+  value: E,
+  originalTarget: WorkflowId,
+  targetTerminatedAt: Instant,
+  targetStatus: WorkflowStatus,
   timestamp: Instant
 )

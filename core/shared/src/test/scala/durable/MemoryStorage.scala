@@ -25,8 +25,12 @@ class MemoryBackingStore(
   private[durable] val activityStore: mutable.Map[(WorkflowId, Int), Either[StoredFailure, Any]],
   // Workflow records storage
   private val workflowRecords: mutable.Map[WorkflowId, WorkflowRecord],
-  // Pending events storage
+  // Pending broadcast events storage (by event name)
   private val pendingEvents: mutable.Map[String, mutable.ArrayBuffer[PendingEvent[Any]]],
+  // Pending targeted events storage (by workflow ID, then event name)
+  private val workflowPendingEvents: mutable.Map[WorkflowId, mutable.Map[String, mutable.ArrayBuffer[PendingEvent[Any]]]],
+  // Dead letter events storage (by event name)
+  private val deadLetterEvents: mutable.Map[String, mutable.ArrayBuffer[DeadEvent[Any]]],
   // Workflow result storage - package private for typeclass access
   private[durable] val resultStore: mutable.Map[WorkflowId, Any],
   // Winning condition storage for combined queries (for replay)
@@ -128,6 +132,67 @@ class MemoryBackingStore(
     }
     Future.successful(())
 
+  // DurableStorageBackend: targeted pending events (per-workflow)
+
+  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit] =
+    val workflowEvents = workflowPendingEvents.getOrElseUpdate(workflowId, mutable.Map.empty)
+    val events = workflowEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+    events += PendingEvent(eventId, eventName, value, timestamp, policy)
+    Future.successful(())
+
+  def loadWorkflowPendingEvents(workflowId: WorkflowId, eventName: String): Future[Seq[PendingEvent[?]]] =
+    val events = for
+      workflowEvents <- workflowPendingEvents.get(workflowId)
+      events <- workflowEvents.get(eventName)
+    yield events.toSeq
+    Future.successful(events.getOrElse(Seq.empty))
+
+  def removeWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit] =
+    for
+      workflowEvents <- workflowPendingEvents.get(workflowId)
+      events <- workflowEvents.get(eventName)
+    do
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then events.remove(idx)
+    Future.successful(())
+
+  def clearWorkflowPendingEvents(workflowId: WorkflowId): Future[Unit] =
+    workflowPendingEvents.remove(workflowId)
+    Future.successful(())
+
+  def loadAllWorkflowPendingEvents(workflowId: WorkflowId): Future[Seq[PendingEvent[?]]] =
+    val allEvents = workflowPendingEvents.get(workflowId) match
+      case Some(eventsByName) =>
+        eventsByName.values.flatMap(_.toSeq).toSeq
+      case None =>
+        Seq.empty
+    Future.successful(allEvents)
+
+  // DurableStorageBackend: dead letter storage
+
+  def saveDeadEvent(eventName: String, deadEvent: DeadEvent[?]): Future[Unit] =
+    val events = deadLetterEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+    events += deadEvent.asInstanceOf[DeadEvent[Any]]
+    Future.successful(())
+
+  def loadDeadEvents(eventName: String): Future[Seq[DeadEvent[?]]] =
+    val events = deadLetterEvents.getOrElse(eventName, mutable.ArrayBuffer.empty).toSeq
+    Future.successful(events)
+
+  def removeDeadEvent(eventName: String, eventId: EventId): Future[Unit] =
+    deadLetterEvents.get(eventName).foreach { events =>
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then events.remove(idx)
+    }
+    Future.successful(())
+
+  def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]] =
+    val result = deadLetterEvents.collectFirst {
+      case (eventName, events) if events.exists(_.eventId == eventId) =>
+        (eventName, events.find(_.eventId == eventId).get)
+    }
+    Future.successful(result)
+
   // Engine-specific: update workflow record with wait condition
   def updateWorkflowRecord(workflowId: WorkflowId, update: WorkflowRecord => WorkflowRecord): Future[Unit] =
     workflowRecords.get(workflowId).foreach { record =>
@@ -150,6 +215,8 @@ class MemoryBackingStore(
     activityStore.clear()
     workflowRecords.clear()
     pendingEvents.clear()
+    workflowPendingEvents.clear()
+    deadLetterEvents.clear()
     resultStore.clear()
     winningConditions.clear()
 

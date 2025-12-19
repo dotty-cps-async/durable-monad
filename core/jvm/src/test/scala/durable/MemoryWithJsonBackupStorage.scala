@@ -37,8 +37,11 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
   // Workflow records
   private val workflows = TrieMap.empty[String, StoredWorkflowRecord]
 
-  // Pending events: eventName -> list of events
+  // Pending broadcast events: eventName -> list of events
   private val pendingEvents = TrieMap.empty[String, mutable.ArrayBuffer[StoredPendingEvent]]
+
+  // Pending targeted events: workflowId -> (eventName -> list of events)
+  private val workflowPendingEvents = TrieMap.empty[String, mutable.Map[String, mutable.ArrayBuffer[StoredPendingEvent]]]
 
   // Workflow results: workflowId -> serialized result
   // Package private for typeclass access
@@ -195,6 +198,71 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
     }
     Future.successful(())
 
+  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit] =
+    val wfEvents = workflowPendingEvents.getOrElseUpdate(workflowId.value, TrieMap.empty)
+    val events = wfEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+    // Note: policy not stored in this simple test storage - uses default
+    events += StoredPendingEvent(eventId.value, eventName, value.toString, timestamp.toString)
+    Future.successful(())
+
+  def loadWorkflowPendingEvents(workflowId: WorkflowId, eventName: String): Future[Seq[PendingEvent[?]]] =
+    val events = for
+      wfEvents <- workflowPendingEvents.get(workflowId.value)
+      events <- wfEvents.get(eventName)
+    yield events.map { e =>
+      PendingEvent[String](EventId(e.eventId), e.eventName, e.value, Instant.parse(e.timestamp))
+    }.toSeq
+    Future.successful(events.getOrElse(Seq.empty))
+
+  def removeWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit] =
+    for
+      wfEvents <- workflowPendingEvents.get(workflowId.value)
+      events <- wfEvents.get(eventName)
+    do
+      val idx = events.indexWhere(_.eventId == eventId.value)
+      if idx >= 0 then events.remove(idx)
+    Future.successful(())
+
+  def clearWorkflowPendingEvents(workflowId: WorkflowId): Future[Unit] =
+    workflowPendingEvents.remove(workflowId.value)
+    Future.successful(())
+
+  def loadAllWorkflowPendingEvents(workflowId: WorkflowId): Future[Seq[PendingEvent[?]]] =
+    val allEvents = workflowPendingEvents.get(workflowId.value) match
+      case Some(eventsByName) =>
+        eventsByName.values.flatMap { events =>
+          events.map(e => PendingEvent[String](EventId(e.eventId), e.eventName, e.value, Instant.parse(e.timestamp)))
+        }.toSeq
+      case None =>
+        Seq.empty
+    Future.successful(allEvents)
+
+  // Dead letter storage - simple implementation for testing
+  private val deadLetterEvents = TrieMap.empty[String, mutable.ArrayBuffer[DeadEvent[Any]]]
+
+  def saveDeadEvent(eventName: String, deadEvent: DeadEvent[?]): Future[Unit] =
+    val events = deadLetterEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+    events += deadEvent.asInstanceOf[DeadEvent[Any]]
+    Future.successful(())
+
+  def loadDeadEvents(eventName: String): Future[Seq[DeadEvent[?]]] =
+    val events = deadLetterEvents.getOrElse(eventName, mutable.ArrayBuffer.empty).toSeq
+    Future.successful(events)
+
+  def removeDeadEvent(eventName: String, eventId: EventId): Future[Unit] =
+    deadLetterEvents.get(eventName).foreach { events =>
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then events.remove(idx)
+    }
+    Future.successful(())
+
+  def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]] =
+    val result = deadLetterEvents.collectFirst {
+      case (eventName, events) if events.exists(_.eventId == eventId) =>
+        (eventName, events.find(_.eventId == eventId).get)
+    }
+    Future.successful(result)
+
   // Backup/Restore
 
   /** Save all state to JSON file */
@@ -235,6 +303,8 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
     activities.clear()
     workflows.clear()
     pendingEvents.clear()
+    workflowPendingEvents.clear()
+    deadLetterEvents.clear()
     winningConditions.clear()
 
   /** Delete backup file */

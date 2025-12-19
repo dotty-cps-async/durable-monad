@@ -110,6 +110,33 @@ class JsonFileStorage(val baseDir: Path) extends DurableStorageBackend:
   def removePendingEvent(eventName: String, eventId: EventId): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
 
+  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def loadWorkflowPendingEvents(workflowId: WorkflowId, eventName: String): Future[Seq[PendingEvent[?]]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def removeWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def clearWorkflowPendingEvents(workflowId: WorkflowId): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def loadAllWorkflowPendingEvents(workflowId: WorkflowId): Future[Seq[PendingEvent[?]]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def saveDeadEvent(eventName: String, deadEvent: DeadEvent[?]): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def loadDeadEvents(eventName: String): Future[Seq[DeadEvent[?]]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def removeDeadEvent(eventName: String, eventId: EventId): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
   /** Store workflow metadata (local JSON format) */
   def storeMetadata(workflowId: WorkflowId, metadata: JsonWorkflowMetadata): Unit =
     val file = workflowDir(workflowId).resolve("metadata.json")

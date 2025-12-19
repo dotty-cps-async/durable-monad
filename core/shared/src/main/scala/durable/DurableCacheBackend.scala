@@ -54,16 +54,47 @@ trait DurableStorageBackend:
     activityIndex: Int
   ): Future[Option[SingleEventQuery[?]]]
 
-  // Engine: pending events operations
+  // Engine: broadcast pending events operations (shared by event name)
 
-  /** Save a pending event */
+  /** Save a pending broadcast event */
   def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit]
 
-  /** Load pending events for a given event name */
+  /** Load pending broadcast events for a given event name */
   def loadPendingEvents(eventName: String): Future[Seq[PendingEvent[?]]]
 
-  /** Remove a pending event after delivery */
+  /** Remove a pending broadcast event after delivery */
   def removePendingEvent(eventName: String, eventId: EventId): Future[Unit]
+
+  // Engine: targeted pending events operations (per-workflow)
+
+  /** Save a pending event targeted at a specific workflow */
+  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit]
+
+  /** Load pending events targeted at a specific workflow for a given event name */
+  def loadWorkflowPendingEvents(workflowId: WorkflowId, eventName: String): Future[Seq[PendingEvent[?]]]
+
+  /** Remove a pending targeted event after delivery */
+  def removeWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit]
+
+  /** Clear all pending events for a workflow (called when workflow terminates) */
+  def clearWorkflowPendingEvents(workflowId: WorkflowId): Future[Unit]
+
+  /** Load all pending events for a workflow (all event types) */
+  def loadAllWorkflowPendingEvents(workflowId: WorkflowId): Future[Seq[PendingEvent[?]]]
+
+  // Engine additions: dead letter storage
+
+  /** Save a dead letter event */
+  def saveDeadEvent(eventName: String, deadEvent: DeadEvent[?]): Future[Unit]
+
+  /** Load dead letter events for a given event name */
+  def loadDeadEvents(eventName: String): Future[Seq[DeadEvent[?]]]
+
+  /** Remove a dead letter event after replay or manual removal */
+  def removeDeadEvent(eventName: String, eventId: EventId): Future[Unit]
+
+  /** Load a specific dead event by ID (across all event names) */
+  def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]]
 
 /**
  * Pure typeclass for caching durable computation results.

@@ -14,21 +14,34 @@ enum DeliveryMode:
   case All
 
 /**
+ * Policy for handling targeted events when the target workflow terminates without reading them.
+ */
+enum DeadLetterPolicy:
+  /** Silently discard the event (default) */
+  case Discard
+  /** Reroute to broadcast queue for other workflows */
+  case MoveToBroadcast
+  /** Move to dead letter queue for inspection/replay */
+  case MoveToDeadLetter
+
+/**
  * Configuration for event delivery semantics.
  *
  * @param expireAfter Optional duration after which events expire and are discarded
  * @param deliveryMode When events become visible to waiting workflows
  * @param consumeOnRead If true, event is removed after one workflow reads it (queue semantics).
  *                      If false, event is delivered to all waiters (broadcast/topic semantics).
+ * @param onTargetTerminated Policy for handling targeted events when workflow terminates without reading
  */
 case class EventConfig(
   expireAfter: Option[Duration] = None,
   deliveryMode: DeliveryMode = DeliveryMode.AfterWait,
-  consumeOnRead: Boolean = true
+  consumeOnRead: Boolean = true,
+  onTargetTerminated: DeadLetterPolicy = DeadLetterPolicy.Discard
 )
 
 object EventConfig:
-  /** Default configuration: no expiry, after-wait delivery, consume on read */
+  /** Default configuration: no expiry, after-wait delivery, consume on read, discard on termination */
   val default: EventConfig = EventConfig()
 
 /**
@@ -52,19 +65,24 @@ trait DurableEventConfig[E]:
   /** If true, event is consumed (queue). If false, broadcast to all waiters. */
   def consumeOnRead: Boolean = true
 
+  /** What to do with targeted events when workflow terminates without reading them */
+  def onTargetTerminated: DeadLetterPolicy = DeadLetterPolicy.Discard
+
   /** Get full config as case class */
-  def config: EventConfig = EventConfig(expireAfter, deliveryMode, consumeOnRead)
+  def config: EventConfig = EventConfig(expireAfter, deliveryMode, consumeOnRead, onTargetTerminated)
 
 object DurableEventConfig extends LowPriorityDurableEventConfig:
   /** Create config with custom settings */
   def apply[E](
     expire: Option[Duration] = None,
     delivery: DeliveryMode = DeliveryMode.AfterWait,
-    consume: Boolean = true
+    consume: Boolean = true,
+    deadLetterPolicy: DeadLetterPolicy = DeadLetterPolicy.Discard
   ): DurableEventConfig[E] = new DurableEventConfig[E]:
     override def expireAfter: Option[Duration] = expire
     override def deliveryMode: DeliveryMode = delivery
     override def consumeOnRead: Boolean = consume
+    override def onTargetTerminated: DeadLetterPolicy = deadLetterPolicy
 
   /** Get config for type E */
   def configOf[E](using ec: DurableEventConfig[E]): EventConfig = ec.config

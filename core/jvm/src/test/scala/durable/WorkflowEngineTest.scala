@@ -185,7 +185,7 @@ class WorkflowEngineTest extends FunSuite:
       _ <- Future(Thread.sleep(100))
       status1 <- engine.queryStatus(workflowId)
       // Send String event (matching what EventWorkflow awaits)
-      _ <- engine.sendEvent("world")
+      _ <- engine.sendEventBroadcast("world")
       // Wait for completion
       _ <- Future(Thread.sleep(200))
       status2 <- engine.queryStatus(workflowId)
@@ -254,4 +254,201 @@ class WorkflowEngineTest extends FunSuite:
     // Verify workflow status is restored
     val status = Await.result(engine2.queryStatus(workflowId), 5.seconds)
     assertEquals(status, Some(WorkflowStatus.Suspended))
+  }
+
+  // ===== sendEventTo tests =====
+
+  test("sendEventTo wakes suspended workflow") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    given DurableEventName[String] = DurableEventName("test-signal")
+
+    val result = for
+      workflowId <- engine.start(EventWorkflow, Tuple1("hello"))
+      _ <- Future(Thread.sleep(100))
+      status1 <- engine.queryStatus(workflowId)
+      // Send event to specific workflow
+      _ <- engine.sendEventTo(workflowId, "targeted-world")
+      _ <- Future(Thread.sleep(200))
+      status2 <- engine.queryStatus(workflowId)
+    yield (status1, status2)
+
+    val (status1, status2) = Await.result(result, 5.seconds)
+    assertEquals(status1, Some(WorkflowStatus.Suspended))
+    assertEquals(status2, Some(WorkflowStatus.Succeeded))
+  }
+
+  test("sendEventTo throws WorkflowNotFoundException for non-existent workflow") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    given DurableEventName[String] = DurableEventName("test-signal")
+
+    val nonExistentId = WorkflowId("non-existent-id")
+    val result = engine.sendEventTo(nonExistentId, "test-event")
+
+    val exception = intercept[WorkflowNotFoundException] {
+      Await.result(result, 5.seconds)
+    }
+    assertEquals(exception.workflowId, nonExistentId)
+  }
+
+  test("sendEventTo throws WorkflowTerminatedException for completed workflow") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    given DurableEventName[String] = DurableEventName("test-signal")
+
+    val result = for
+      workflowId <- engine.start(SimpleWorkflow, Tuple1(21))
+      _ <- Future(Thread.sleep(100))
+      status <- engine.queryStatus(workflowId)
+      _ = assertEquals(status, Some(WorkflowStatus.Succeeded))
+      // Try to send event to completed workflow
+      sendResult <- engine.sendEventTo(workflowId, "too-late")
+    yield sendResult
+
+    val exception = intercept[WorkflowTerminatedException] {
+      Await.result(result, 5.seconds)
+    }
+    assertEquals(exception.status, WorkflowStatus.Succeeded)
+  }
+
+  test("sendEventTo queues event when workflow is not waiting for it") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    given DurableEventName[String] = DurableEventName("test-signal")
+
+    val result = for
+      // Start workflow on timer (not waiting for event)
+      workflowId <- engine.start(TimerWorkflow, Tuple1(5000L))  // 5 second timer
+      _ <- Future(Thread.sleep(100))
+      status1 <- engine.queryStatus(workflowId)
+      _ = assertEquals(status1, Some(WorkflowStatus.Suspended))
+      // Send event - should be queued since workflow is waiting for timer, not event
+      _ <- engine.sendEventTo(workflowId, "queued-event")
+      // Event should be queued, not delivered - workflow still suspended on timer
+      status2 <- engine.queryStatus(workflowId)
+    yield status2
+
+    val status2 = Await.result(result, 5.seconds)
+    assertEquals(status2, Some(WorkflowStatus.Suspended))
+  }
+
+  // ===== Dead letter handling tests =====
+
+  // Event type with MoveToDeadLetter policy for testing
+  case class CriticalAlert(message: String)
+  object CriticalAlert:
+    given DurableEventName[CriticalAlert] = DurableEventName("critical-alert")
+    given DurableEventConfig[CriticalAlert] with
+      override def onTargetTerminated = DeadLetterPolicy.MoveToDeadLetter
+
+  // Event type with MoveToBroadcast policy for testing
+  case class RecoverableEvent(data: String)
+  object RecoverableEvent:
+    given DurableEventName[RecoverableEvent] = DurableEventName("recoverable-event")
+    given DurableEventConfig[RecoverableEvent] with
+      override def onTargetTerminated = DeadLetterPolicy.MoveToBroadcast
+
+  test("queued event is discarded by default when workflow is cancelled") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    given DurableEventName[String] = DurableEventName("test-signal")
+
+    val result = for
+      // Use TimerWorkflow so it stays suspended
+      workflowId <- engine.start(TimerWorkflow, Tuple1(5000L))
+      _ <- Future(Thread.sleep(100))
+      status1 <- engine.queryStatus(workflowId)
+      _ = assertEquals(status1, Some(WorkflowStatus.Suspended))
+      // Queue an event (workflow is suspended waiting for timer, not event)
+      _ <- engine.sendEventTo(workflowId, "will-be-discarded")
+      // Cancel the workflow to trigger termination processing
+      _ <- engine.cancel(workflowId)
+      status2 <- engine.queryStatus(workflowId)
+      // Default policy is Discard - event should be gone
+      deadLetters <- engine.queryDeadLetters[String]
+    yield (status2, deadLetters)
+
+    val (status2, deadLetters) = Await.result(result, 5.seconds)
+    assertEquals(status2, Some(WorkflowStatus.Cancelled))
+    assertEquals(deadLetters.size, 0)  // Event was discarded
+  }
+
+  test("queued event moves to dead letter queue when workflow is cancelled with MoveToDeadLetter policy") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    import CriticalAlert.given
+
+    val result = for
+      // Use TimerWorkflow so it stays suspended
+      workflowId <- engine.start(TimerWorkflow, Tuple1(5000L))
+      _ <- Future(Thread.sleep(100))
+      status1 <- engine.queryStatus(workflowId)
+      _ = assertEquals(status1, Some(WorkflowStatus.Suspended))
+      // Queue an event with MoveToDeadLetter policy
+      _ <- engine.sendEventTo(workflowId, CriticalAlert("important message"))
+      // Cancel the workflow to trigger dead letter processing
+      _ <- engine.cancel(workflowId)
+      status2 <- engine.queryStatus(workflowId)
+      deadLetters <- engine.queryDeadLetters[CriticalAlert]
+    yield (status2, deadLetters, workflowId)
+
+    val (status2, deadLetters, workflowId) = Await.result(result, 5.seconds)
+    assertEquals(status2, Some(WorkflowStatus.Cancelled))
+    assertEquals(deadLetters.size, 1)
+    assertEquals(deadLetters.head.value.message, "important message")
+    assertEquals(deadLetters.head.originalTarget, workflowId)
+    assertEquals(deadLetters.head.targetStatus, WorkflowStatus.Cancelled)
+  }
+
+  test("removeDeadLetter removes event from dead letter queue") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    import CriticalAlert.given
+
+    val result = for
+      workflowId <- engine.start(TimerWorkflow, Tuple1(5000L))
+      _ <- Future(Thread.sleep(100))
+      _ <- engine.sendEventTo(workflowId, CriticalAlert("to-remove"))
+      _ <- engine.cancel(workflowId)
+      deadLetters1 <- engine.queryDeadLetters[CriticalAlert]
+      _ = assertEquals(deadLetters1.size, 1)
+      eventId = deadLetters1.head.eventId
+      removed <- engine.removeDeadLetter(eventId)
+      deadLetters2 <- engine.queryDeadLetters[CriticalAlert]
+    yield (removed, deadLetters2)
+
+    val (removed, deadLetters2) = Await.result(result, 5.seconds)
+    assertEquals(removed, true)
+    assertEquals(deadLetters2.size, 0)
+  }
+
+  test("replayDeadLetter moves event to broadcast queue") {
+    val (storage, engine) = createEngine()
+    given MemoryBackingStore = storage
+    given [T]: DurableStorage[T, MemoryBackingStore] = storage.forType[T]
+    import CriticalAlert.given
+
+    val result = for
+      workflowId <- engine.start(TimerWorkflow, Tuple1(5000L))
+      _ <- Future(Thread.sleep(100))
+      _ <- engine.sendEventTo(workflowId, CriticalAlert("to-replay"))
+      _ <- engine.cancel(workflowId)
+      deadLetters1 <- engine.queryDeadLetters[CriticalAlert]
+      _ = assertEquals(deadLetters1.size, 1)
+      eventId = deadLetters1.head.eventId
+      replayed <- engine.replayDeadLetter(eventId)
+      deadLetters2 <- engine.queryDeadLetters[CriticalAlert]
+    yield (replayed, deadLetters2)
+
+    val (replayed, deadLetters2) = Await.result(result, 5.seconds)
+    assertEquals(replayed, true)
+    assertEquals(deadLetters2.size, 0)  // Event was removed from dead letter queue
   }

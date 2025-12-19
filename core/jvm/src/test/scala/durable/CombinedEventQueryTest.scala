@@ -105,7 +105,7 @@ class CombinedEventQueryTest extends FunSuite:
     val result = for
       workflowId <- engine.start(TwoEventWorkflow, Tuple1("order-1"))
       _ <- Future(Thread.sleep(100))  // Wait for suspension
-      _ <- engine.sendEvent(PaymentReceived(99.99))
+      _ <- engine.sendEventBroadcast(PaymentReceived(99.99))
       _ <- Future(Thread.sleep(100))  // Wait for completion
       status <- engine.queryStatus(workflowId)
       queryResult <- engine.queryResult[String](workflowId)
@@ -125,7 +125,7 @@ class CombinedEventQueryTest extends FunSuite:
     val result = for
       workflowId <- engine.start(TwoEventWorkflow, Tuple1("order-1"))
       _ <- Future(Thread.sleep(100))  // Wait for suspension
-      _ <- engine.sendEvent(OrderCancelled("user requested"))
+      _ <- engine.sendEventBroadcast(OrderCancelled("user requested"))
       _ <- Future(Thread.sleep(100))  // Wait for completion
       status <- engine.queryStatus(workflowId)
       queryResult <- engine.queryResult[String](workflowId)
@@ -162,7 +162,7 @@ class CombinedEventQueryTest extends FunSuite:
     val result = for
       workflowId <- engine.start(EventOrTimeoutWorkflow, Tuple1(5000L))  // 5s timeout
       _ <- Future(Thread.sleep(100))  // Wait for suspension
-      _ <- engine.sendEvent(PaymentReceived(50.00))  // Event arrives before timeout
+      _ <- engine.sendEventBroadcast(PaymentReceived(50.00))  // Event arrives before timeout
       _ <- Future(Thread.sleep(100))  // Wait for completion
       status <- engine.queryStatus(workflowId)
       queryResult <- engine.queryResult[String](workflowId)
