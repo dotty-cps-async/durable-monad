@@ -36,6 +36,7 @@ object DurablePreprocessor:
     val awaitSymbol = Symbol.requiredMethod("cps.await")
 
     // First, find DurableStorageBackend in scope to get the backend type S
+    // Moved here so it's available to FutureConvertibleAwaitTransformer
     val backendType: TypeRepr = Implicits.search(TypeRepr.of[DurableStorageBackend]) match
       case iss: ImplicitSearchSuccess =>
         iss.tree.tpe.widen
@@ -44,6 +45,161 @@ object DurablePreprocessor:
           s"No DurableStorageBackend found in scope. Add: given DurableStorageBackend = yourBackend",
           body.asTerm.pos
         )
+
+    // Get the symbol for durableFormalConversion for direct comparison
+    val durableFormalConversionSymbol = Symbol.requiredMethod("durable.Durable.durableFormalConversion")
+
+    /**
+     * TreeMap to transform F[T].await for types convertible to Future.
+     *
+     * When an await call uses our durableFormalConversion, we transform it to:
+     *   await(Durable.Activity(() => conversion.apply(f), storage, policy))
+     *
+     * This runs before transformTopLevel to handle nested awaits in expressions.
+     */
+    class FutureConvertibleAwaitTransformer extends TreeMap:
+
+      /** Check if a conversion term uses our durableFormalConversion.
+        * durableFormalConversion[F,S](backend, toFuture) has structure: Apply(TypeApply(method, typeArgs), args)
+        */
+      private def isDurableFormalConversion(conversion: Term): Boolean =
+        conversion match
+          case Apply(TypeApply(method, _), _) => method.symbol == durableFormalConversionSymbol
+          case _ => false
+
+      override def transformTerm(term: Term)(owner: Symbol): Term =
+        term match
+          // Check for .await extension method call on Future/etc (before CPS expansion)
+          // Pattern: Apply(Select(future, "await"), List(ctx, conversion))
+          case app @ Apply(Apply(sel @ Select(effectArg, "await"), List(ctxArg)), List(conversion))
+              if effectArg.tpe.widen match
+                case AppliedType(f, _) => !(f =:= TypeRepr.of[Durable]) // Not Durable[T]
+                case _ => false
+              =>
+            if isDurableFormalConversion(conversion) then
+              effectArg.tpe.widen match
+                case AppliedType(fType, List(innerType)) =>
+                  val transformedEffectArg = transformTerm(effectArg)(owner)
+                  val toFutureConversion = extractToFutureEvidence(conversion)
+                  transformFutureConvertibleAwait(transformedEffectArg, fType, innerType, toFutureConversion)
+                case _ =>
+                  super.transformTerm(term)(owner)
+            else
+              super.transformTerm(term)(owner)
+
+          // await call: Apply(Apply(TypeApply(fn, typeArgs), List(effectArg)), List(ctx, conversion))
+          case app @ Apply(Apply(TypeApply(fn, typeArgs), List(effectArg)), List(ctxArg, conversion))
+              if fn.symbol == awaitSymbol =>
+            if isDurableFormalConversion(conversion) then
+              effectArg.tpe.widen match
+                case AppliedType(fType, List(innerType)) =>
+                  // Transform the effectArg recursively first
+                  val transformedEffectArg = transformTerm(effectArg)(owner)
+                  // Get the CpsMonadConversion[F, Future] from formal's evidence
+                  val toFutureConversion = extractToFutureEvidence(conversion)
+                  transformFutureConvertibleAwait(transformedEffectArg, fType, innerType, toFutureConversion)
+                case _ =>
+                  super.transformTerm(term)(owner)
+            else
+              // Not our formal conversion - still recurse into arguments
+              super.transformTerm(term)(owner)
+          case _ =>
+            super.transformTerm(term)(owner)
+
+      /** Extract the CpsMonadConversion[F, Future] evidence from our formal conversion */
+      // TODO: verify that the structure is exactly as expected (backend, toFuture)
+      //       and that toFuture is actually a CpsMonadConversion[F, Future]
+      private def extractToFutureEvidence(formalConversion: Term): Term =
+        // Structure: durableFormalConversion[F, S](backend, toFuture)
+        // We need toFuture which is the second argument
+        formalConversion match
+          case Apply(_, args) if args.length >= 2 =>
+            // Return second arg (toFuture conversion) - it's CpsMonadConversion[F, Future]
+            args(1)
+          case Apply(_, args) =>
+            report.errorAndAbort(
+              s"Expected durableFormalConversion(backend, toFuture) with 2 args, got ${args.length} args: ${formalConversion.show}",
+              formalConversion.pos
+            )
+          case _ =>
+            report.errorAndAbort(
+              s"Expected Apply structure for durableFormalConversion, got: ${formalConversion.getClass.getSimpleName}: ${formalConversion.show}",
+              formalConversion.pos
+            )
+
+      /** Transform F[T].await to await(Durable.Activity(...)) */
+      private def transformFutureConvertibleAwait(
+          effectExpr: Term,
+          fType: TypeRepr,
+          innerType: TypeRepr,
+          toFutureConversion: Term
+      ): Term =
+        // Resolve DurableStorage[T, S] for the inner type
+        val storageType = TypeRepr.of[DurableStorage].appliedTo(List(innerType, backendType))
+        val storage = Implicits.search(storageType) match
+          case iss: ImplicitSearchSuccess => iss.tree
+          case isf: ImplicitSearchFailure =>
+            report.errorAndAbort(
+              s"No DurableStorage[${innerType.show}, ${backendType.show}] found for ${fType.show}.await",
+              effectExpr.pos
+            )
+
+        // Get RetryPolicy.noRetry
+        val retryPolicyModule = Symbol.requiredModule("durable.RetryPolicy")
+        val noRetryPolicy = Select(Ref(retryPolicyModule), retryPolicyModule.fieldMember("noRetry"))
+
+        // Build: toFutureConversion.apply[innerType](effectExpr) which returns Future[T]
+        val applyMethod = toFutureConversion.tpe.widen.typeSymbol.methodMember("apply").head
+        val toFutureCall = Apply(
+          TypeApply(
+            Select(toFutureConversion, applyMethod),
+            List(TypeTree.of(using innerType.asType))
+          ),
+          List(effectExpr)
+        )
+
+        // Build lambda: () => toFutureCall
+        val futureType = TypeRepr.of[scala.concurrent.Future].appliedTo(innerType)
+        val lambdaMethodType = MethodType(Nil)(_ => Nil, _ => futureType)
+        val lambda = Lambda(
+          Symbol.spliceOwner,
+          lambdaMethodType,
+          (meth: Symbol, params: List[Tree]) => toFutureCall.changeOwner(meth)
+        )
+
+        // Build: Durable.Activity[T, S](() => ..., storage, noRetryPolicy)
+        val activityClass = Symbol.requiredClass("durable.Durable.Activity")
+
+        // Activity case class takes: compute: () => Future[A], storage: DurableStorage[A, S], retryPolicy: RetryPolicy
+        val activityCall = Apply(
+          TypeApply(
+            Ref(activityClass.companionModule).select(activityClass.companionModule.methodMember("apply").head),
+            List(
+              TypeTree.of(using innerType.asType),
+              TypeTree.of(using backendType.asType)
+            )
+          ),
+          List(lambda, storage, noRetryPolicy)
+        )
+
+        // Wrap with await[Durable, T, Durable](activityCall)(using ctx, identityConversion)
+        val awaitRef = Ref(Symbol.requiredMethod("cps.await"))
+        val awaitWithTypes = TypeApply(
+          awaitRef,
+          List(
+            TypeTree.of[Durable],
+            TypeTree.of(using innerType.asType),
+            TypeTree.of[Durable]
+          )
+        )
+        val awaitApply1 = Apply(awaitWithTypes, List(activityCall))
+        val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))
+        val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
+        Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
+
+    // Apply FutureConvertibleAwaitTransformer first to transform all F[_].await calls
+    val futureTransformer = new FutureConvertibleAwaitTransformer
+    val bodyAfterFutureTransform = futureTransformer.transformTerm(body.asTerm)(Symbol.spliceOwner)
 
     // Recursively widen union types - handles cases like 10 | 42 | 0 -> Int
     def widenAll(tpe: TypeRepr): TypeRepr = tpe match
@@ -345,5 +501,5 @@ object DurablePreprocessor:
         case other =>
           report.errorAndAbort(s"DurablePreprocessor: unexpected term type: ${other.getClass.getName}", other.pos)
 
-    val transformed = transformTopLevel(body.asTerm, isReturnPosition = true)
+    val transformed = transformTopLevel(bodyAfterFutureTransform, isReturnPosition = true)
     transformed.asExprOf[A]
