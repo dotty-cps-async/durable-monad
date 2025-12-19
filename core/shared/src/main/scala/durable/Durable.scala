@@ -298,25 +298,21 @@ object Durable:
     transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
       ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
 
-/**
- * Event query builder for cleaner await syntax with inferred backend type.
- *
- * Usage:
- * {{{
- * given DurableEventName[MyEvent] = ...
- * given backend: MemoryBackingStore = ...
- *
- * // Single event
- * val event = await(Event[MyEvent].receive)
- *
- * // Combined with timeout
- * val result = await((Event[MyEvent] | TimeReached.after(1.minute)).receive)
- * result match
- *   case e: MyEvent => handleEvent(e)
- *   case t: TimeReached => handleTimeout()
- * }}}
- */
-object Event:
-  /** Create an event query for the given event type */
-  def apply[E](using eventName: DurableEventName[E]): SingleEvent[E] =
-    SingleEvent(eventName.name)
+  /**
+   * Formal conversion for any F[_] that can convert to Future.
+   * Passes type-checking; actual transform done by preprocessor.
+   * Uses inline + compiletime.error for compile-time failure if not transformed.
+   *
+   * Note: For await(Durable[T]), dotty-cps-async's identityConversion handles it
+   * because there's no CpsMonadConversion[Durable, Future].
+   */
+  given durableFormalConversion[F[_], S <: DurableStorageBackend](using
+      backend: S,
+      toFuture: CpsMonadConversion[F, Future]
+  ): CpsMonadConversion[F, Durable] with
+    def apply[T](fa: F[T]): Durable[T] =
+      throw RuntimeException(
+        "F[_].await should be transformed by DurablePreprocessor. " +
+        "This indicates the preprocessor failed to intercept the await call."
+      )
+
