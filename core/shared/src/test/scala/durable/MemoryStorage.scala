@@ -200,6 +200,88 @@ class MemoryBackingStore(
     }
     Future.successful(())
 
+  // === Composite operations for atomic persistence ===
+
+  def deliverEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    // Already protected by coordinator's single thread - just do sequentially
+    winningConditions.put((workflowId, activityIndex), winningCondition)
+    activityStore.put((workflowId, activityIndex), Right(eventValue))
+    workflowRecords.updateWith(workflowId)(_.map(_.copy(
+      status = WorkflowStatus.Running,
+      updatedAt = Instant.now()
+    ).clearWaitConditions))
+    Future.successful(())
+
+  def deliverPendingEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend],
+    pendingEventId: EventId,
+    eventName: String,
+    isTargeted: Boolean
+  ): Future[Unit] =
+    // First deliver the event
+    winningConditions.put((workflowId, activityIndex), winningCondition)
+    activityStore.put((workflowId, activityIndex), Right(eventValue))
+    workflowRecords.updateWith(workflowId)(_.map(_.copy(
+      status = WorkflowStatus.Running,
+      updatedAt = Instant.now()
+    ).clearWaitConditions))
+    // Then remove from pending queue
+    if isTargeted then
+      for
+        workflowEvents <- workflowPendingEvents.get(workflowId)
+        events <- workflowEvents.get(eventName)
+      do
+        val idx = events.indexWhere(_.eventId == pendingEventId)
+        if idx >= 0 then events.remove(idx)
+    else
+      pendingEvents.get(eventName).foreach { events =>
+        val idx = events.indexWhere(_.eventId == pendingEventId)
+        if idx >= 0 then events.remove(idx)
+      }
+    Future.successful(())
+
+  def suspendWorkflow(
+    workflowId: WorkflowId,
+    metadata: WorkflowMetadata,
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
+  ): Future[Unit] =
+    workflowRecords.updateWith(workflowId)(_.map(_.copy(
+      metadata = metadata,
+      status = WorkflowStatus.Suspended,
+      waitingForEvents = waitingForEvents,
+      waitingForTimer = waitingForTimer,
+      waitingForWorkflows = waitingForWorkflows,
+      updatedAt = Instant.now()
+    )))
+    Future.successful(())
+
+  def deliverTimer(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    wakeAt: Instant,
+    timeReached: TimeReached,
+    timeReachedStorage: DurableStorage[TimeReached, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    winningConditions.put((workflowId, activityIndex), TimerInstant(wakeAt))
+    activityStore.put((workflowId, activityIndex), Right(timeReached))
+    workflowRecords.updateWith(workflowId)(_.map(_.copy(
+      status = WorkflowStatus.Running,
+      updatedAt = Instant.now()
+    ).clearWaitConditions))
+    Future.successful(())
+
   // Testing helpers
 
   /** Get raw value (for testing/debugging) */

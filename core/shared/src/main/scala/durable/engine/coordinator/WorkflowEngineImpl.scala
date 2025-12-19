@@ -5,12 +5,15 @@ import scala.util.{Success, Failure}
 import java.time.{Instant, Duration}
 
 import durable.*
-import durable.engine.{WorkflowStateCoordinator, TestHooks, TimerHandle}
+import durable.engine.{WorkflowStateCoordinator, TestHooks, TimerHandle, CoordinatorOp, SuspendResult, SendResult}
 import durable.runtime.Scheduler
 
 /**
  * WorkflowEngine implementation using WorkflowStateCoordinator.
- * 
+ *
+ * Uses the coordinator's submit method with CoordinatorOp to ensure
+ * atomic check-then-act sequences and prevent race conditions.
+ *
  * @param storage The storage backend
  * @param stateCoordinator Manages workflow state with serialized access
  * @param timeReachedStorage Storage for TimeReached values (needed for timer support)
@@ -125,107 +128,21 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     condition: EventQuery.Combined[?, ?]
   ): Future[Unit] =
     val activityIndex = snapshot.activityIndex
+    val eventStorages = condition.events.view.mapValues(_.asInstanceOf[DurableStorage[?, ?]]).toMap
 
     for
-      _ <- stateCoordinator.markSuspended(workflowId, activityIndex, condition)
-      _ <- hooks.yieldPoint("handleSuspended.afterRegister")
-      pendingResult <- checkPendingEventsInternal(workflowId, condition, activityIndex)
-      _ <- hooks.yieldPoint("handleSuspended.afterCheckPending")
-      _ <- pendingResult match
-        case Some(_) =>
-          // Pending event was delivered - workflow resumed
-          Future.successful(())
-        case None =>
-          // No pending event - persist suspended state
-          stateCoordinator.getActive(workflowId) match
-            case Some(record) =>
-              for
-                _ <- storage.saveWorkflowMetadata(workflowId, record.metadata, WorkflowStatus.Suspended)
-                _ <- storage.updateWorkflowStatusAndCondition(
-                  workflowId, WorkflowStatus.Suspended,
-                  condition.eventNames, condition.timerAt.map(_._1), condition.workflows.keySet
-                )
-                _ <- registerTimer(workflowId, condition, activityIndex)
-              yield ()
-            case None =>
-              Future.failed(new RuntimeException(s"Workflow $workflowId not found in active state"))
-    yield ()
-
-  // Check for pending events (targeted events first, then broadcast events)
-  private def checkPendingEventsInternal(
-    workflowId: WorkflowId,
-    condition: EventQuery.Combined[?, ?],
-    activityIndex: Int
-  ): Future[Option[Unit]] =
-    val eventChecks = condition.events.toSeq.map { case (eventName, eventStorage) =>
-      // Check workflow-specific (targeted) events first
-      storage.loadWorkflowPendingEvents(workflowId, eventName).flatMap { targetedPending =>
-        targetedPending.headOption match
-          case Some(pendingEvent) =>
-            val typedStorage = eventStorage.asInstanceOf[DurableStorage[?, S]]
-            deliverTargetedPendingEventInternal(workflowId, eventName, pendingEvent, typedStorage, activityIndex)
-              .map(_ => Some(()))
-          case None =>
-            // Fall back to broadcast pending events
-            storage.loadPendingEvents(eventName).flatMap { broadcastPending =>
-              broadcastPending.headOption match
-                case Some(pendingEvent) =>
-                  val typedStorage = eventStorage.asInstanceOf[DurableStorage[?, S]]
-                  deliverBroadcastPendingEventInternal(workflowId, eventName, pendingEvent, typedStorage, activityIndex)
-                    .map(_ => Some(()))
-                case None =>
-                  Future.successful(None)
-            }
-      }
-    }
-    Future.sequence(eventChecks).map(_.flatten.headOption)
-
-  // Deliver a targeted pending event (from workflow-specific queue)
-  private def deliverTargetedPendingEventInternal(
-    workflowId: WorkflowId,
-    eventName: String,
-    pendingEvent: PendingEvent[?],
-    eventStorage: DurableStorage[?, S],
-    activityIndex: Int
-  ): Future[Unit] =
-    for
-      _ <- storage.removeWorkflowPendingEvent(workflowId, eventName, pendingEvent.eventId)
-      _ <- storage.storeWinningCondition(workflowId, activityIndex, SingleEvent(eventName))
-      typedStorage = eventStorage.asInstanceOf[DurableStorage[Any, S]]
-      _ <- typedStorage.storeStep(storage, workflowId, activityIndex, pendingEvent.value)
-      recordOpt <- stateCoordinator.markResumed(workflowId, activityIndex + 1)
-      _ <- recordOpt match
-        case Some(record) =>
-          for
-            _ <- storage.updateWorkflowStatus(workflowId, WorkflowStatus.Running)
-            _ <- recreateAndResumeInternal(workflowId, record, activityIndex + 1)
-          yield ()
-        case None =>
-          Future.failed(new RuntimeException(s"Workflow $workflowId not found"))
-    yield ()
-
-  // Deliver a broadcast pending event (from shared queue)
-  private def deliverBroadcastPendingEventInternal(
-    workflowId: WorkflowId,
-    eventName: String,
-    pendingEvent: PendingEvent[?],
-    eventStorage: DurableStorage[?, S],
-    activityIndex: Int
-  ): Future[Unit] =
-    for
-      _ <- storage.removePendingEvent(eventName, pendingEvent.eventId)
-      _ <- storage.storeWinningCondition(workflowId, activityIndex, SingleEvent(eventName))
-      typedStorage = eventStorage.asInstanceOf[DurableStorage[Any, S]]
-      _ <- typedStorage.storeStep(storage, workflowId, activityIndex, pendingEvent.value)
-      recordOpt <- stateCoordinator.markResumed(workflowId, activityIndex + 1)
-      _ <- recordOpt match
-        case Some(record) =>
-          for
-            _ <- storage.updateWorkflowStatus(workflowId, WorkflowStatus.Running)
-            _ <- recreateAndResumeInternal(workflowId, record, activityIndex + 1)
-          yield ()
-        case None =>
-          Future.failed(new RuntimeException(s"Workflow $workflowId not found"))
+      _ <- hooks.yieldPoint("handleSuspended.beforeSubmit")
+      result <- stateCoordinator.submit(CoordinatorOp.SuspendAndCheckPending(
+        workflowId, activityIndex, condition, eventStorages
+      ))
+      _ <- hooks.yieldPoint("handleSuspended.afterSubmit")
+      _ <- result match
+        case SuspendResult.Delivered(record, _) =>
+          // Pending event was delivered - resume workflow
+          recreateAndResumeInternal(workflowId, record, activityIndex + 1)
+        case SuspendResult.Suspended =>
+          // No pending event - register timer if needed
+          registerTimer(workflowId, condition, activityIndex)
     yield ()
 
   private def handleFailed(workflowId: WorkflowId, error: Throwable): Future[Unit] =
@@ -287,26 +204,17 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     condition: EventQuery.Combined[?, ?]
   ): Future[Unit] =
     val activityIndex = snapshot.activityIndex
+    val eventStorages = condition.events.view.mapValues(_.asInstanceOf[DurableStorage[?, ?]]).toMap
 
     for
-      _ <- stateCoordinator.markSuspended(workflowId, activityIndex, condition)
-      pendingResult <- checkPendingEventsInternal(workflowId, condition, activityIndex)
-      _ <- pendingResult match
-        case Some(_) =>
-          Future.successful(())
-        case None =>
-          stateCoordinator.getActive(workflowId) match
-            case Some(record) =>
-              for
-                _ <- storage.saveWorkflowMetadata(workflowId, record.metadata, WorkflowStatus.Suspended)
-                _ <- storage.updateWorkflowStatusAndCondition(
-                  workflowId, WorkflowStatus.Suspended,
-                  condition.eventNames, condition.timerAt.map(_._1), condition.workflows.keySet
-                )
-                _ <- registerTimer(workflowId, condition, activityIndex)
-              yield ()
-            case None =>
-              Future.failed(new RuntimeException(s"Workflow $workflowId not found in active state"))
+      result <- stateCoordinator.submit(CoordinatorOp.SuspendAndCheckPending(
+        workflowId, activityIndex, condition, eventStorages
+      ))
+      _ <- result match
+        case SuspendResult.Delivered(record, _) =>
+          recreateAndResumeInternal(workflowId, record, activityIndex + 1)
+        case SuspendResult.Suspended =>
+          registerTimer(workflowId, condition, activityIndex)
     yield ()
 
   private def handleFailedInternal(workflowId: WorkflowId, error: Throwable): Future[Unit] =
@@ -358,24 +266,12 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
   // Resume workflow after timer fires
   private def resumeFromTimer(workflowId: WorkflowId, wakeAt: Instant, activityIndex: Int): Future[Unit] =
     for
-      recordOpt <- stateCoordinator.getAndRemoveTimer(workflowId)
+      recordOpt <- stateCoordinator.submit(CoordinatorOp.HandleTimerFired(
+        workflowId, wakeAt, activityIndex, timeReachedStorage.asInstanceOf[DurableStorage[TimeReached, ?]]
+      ))
       _ <- recordOpt match
         case Some(record) =>
-          val firedAt = Instant.now()
-          val timeReached = TimeReached(scheduledAt = wakeAt, firedAt = firedAt)
-          for
-            _ <- storage.storeWinningCondition(workflowId, activityIndex, TimerInstant(wakeAt))
-            _ <- timeReachedStorage.storeStep(storage, workflowId, activityIndex, timeReached)
-            resumedOpt <- stateCoordinator.markResumed(workflowId, activityIndex + 1)
-            _ <- resumedOpt match
-              case Some(_) =>
-                for
-                  _ <- storage.updateWorkflowStatus(workflowId, WorkflowStatus.Running)
-                  _ <- recreateAndResumeInternal(workflowId, record, activityIndex + 1)
-                yield ()
-              case None =>
-                Future.successful(())
-          yield ()
+          recreateAndResumeInternal(workflowId, record, activityIndex + 1)
         case None =>
           Future.successful(())
     yield ()
@@ -415,43 +311,25 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     val timestamp = Instant.now()
     val policy = eventConfig.onTargetTerminated
 
-    // Check active state first
-    stateCoordinator.getActive(targetWorkflowId) match
-      case Some(record) =>
-        // Workflow is active (Running or Suspended)
-        if record.status.isTerminal then
-          Future.failed(WorkflowTerminatedException(targetWorkflowId, record.status))
-        else if record.status == WorkflowStatus.Suspended && record.isWaitingForEvent(name) then
-          // Deliver immediately
-          val activityIndex = record.metadata.activityIndex
-          for
-            _ <- storage.storeWinningCondition(targetWorkflowId, activityIndex, SingleEvent(name))
-            _ <- eventStorage.storeStep(storage, targetWorkflowId, activityIndex, event)
-            resumedOpt <- stateCoordinator.markResumed(targetWorkflowId, activityIndex + 1)
-            _ <- resumedOpt match
-              case Some(_) =>
-                for
-                  _ <- storage.updateWorkflowStatus(targetWorkflowId, WorkflowStatus.Running)
-                  _ <- recreateAndResumeInternal(targetWorkflowId, record, activityIndex + 1)
-                yield ()
-              case None =>
-                Future.successful(())
-          yield ()
-        else
-          // Running or waiting for different condition - queue for later with policy
-          storage.saveWorkflowPendingEvent(targetWorkflowId, name, eventId, event, timestamp, policy)
-
-      case None =>
-        // Not in active state - check storage for terminal/non-existent
-        storage.loadWorkflowMetadata(targetWorkflowId).flatMap {
-          case Some((_, status)) if status.isTerminal =>
-            Future.failed(WorkflowTerminatedException(targetWorkflowId, status))
-          case Some(_) =>
-            // Workflow exists but not in active state (race condition?) - queue anyway
-            storage.saveWorkflowPendingEvent(targetWorkflowId, name, eventId, event, timestamp, policy)
-          case None =>
-            Future.failed(WorkflowNotFoundException(targetWorkflowId))
-        }
+    for
+      result <- stateCoordinator.submit(CoordinatorOp.SendTargetedEvent(
+        targetWorkflowId, name, event, eventId, timestamp, policy,
+        eventStorage.asInstanceOf[DurableStorage[?, ?]]
+      ))
+      _ <- result match
+        case SendResult.Delivered(targetId) =>
+          stateCoordinator.getActive(targetId) match
+            case Some(record) =>
+              recreateAndResumeInternal(targetId, record, record.metadata.activityIndex)
+            case None =>
+              Future.successful(())
+        case SendResult.Queued(_) =>
+          Future.successful(())
+        case SendResult.TargetTerminated(status) =>
+          Future.failed(WorkflowTerminatedException(targetWorkflowId, status))
+        case SendResult.TargetNotFound =>
+          Future.failed(WorkflowNotFoundException(targetWorkflowId))
+    yield ()
 
   // Broadcast an event to workflows waiting for this event type
   def sendEventBroadcast[E](event: E)(using
@@ -463,27 +341,22 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     val timestamp = Instant.now()
 
     for
-      _ <- hooks.yieldPoint("sendEventBroadcast.beforeCheck")
-      waitingWorkflows <- stateCoordinator.findWaitingForEvent(name)
-      _ <- hooks.yieldPoint("sendEventBroadcast.afterCheckWaiting")
-      _ <- if waitingWorkflows.isEmpty then
-        storage.savePendingEvent(name, eventId, event, timestamp)
-      else
-        val target = waitingWorkflows.head
-        val activityIndex = target.metadata.activityIndex
-        for
-          _ <- storage.storeWinningCondition(target.id, activityIndex, SingleEvent(name))
-          _ <- eventStorage.storeStep(storage, target.id, activityIndex, event)
-          resumedOpt <- stateCoordinator.markResumed(target.id, activityIndex + 1)
-          _ <- resumedOpt match
-            case Some(_) =>
-              for
-                _ <- storage.updateWorkflowStatus(target.id, WorkflowStatus.Running)
-                _ <- recreateAndResumeInternal(target.id, target, activityIndex + 1)
-              yield ()
+      _ <- hooks.yieldPoint("sendEventBroadcast.beforeSubmit")
+      result <- stateCoordinator.submit(CoordinatorOp.SendBroadcastEvent(
+        name, event, eventId, timestamp, eventStorage.asInstanceOf[DurableStorage[?, ?]]
+      ))
+      _ <- hooks.yieldPoint("sendEventBroadcast.afterSubmit")
+      _ <- result match
+        case SendResult.Delivered(targetId) =>
+          stateCoordinator.getActive(targetId) match
+            case Some(record) =>
+              recreateAndResumeInternal(targetId, record, record.metadata.activityIndex)
             case None =>
               Future.successful(())
-        yield ()
+        case SendResult.Queued(_) =>
+          Future.successful(())
+        case _ =>
+          Future.successful(())
     yield ()
 
   // Query workflow status (read-only)
@@ -520,8 +393,28 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
   def recover(): Future[RecoveryReport] =
     for
       workflows <- storage.listActiveWorkflows()
-      (suspended, running) = workflows.partition(_.status == WorkflowStatus.Suspended)
-      _ <- stateCoordinator.recoverWorkflows(workflows)
+
+      // Fix partially-completed deliveries
+      fixed <- Future.traverse(workflows) { record =>
+        if record.status == WorkflowStatus.Suspended then
+          storage.retrieveWinningCondition(record.id, record.metadata.activityIndex).flatMap {
+            case Some(_) =>
+              // Event was stored but status not updated - fix it
+              storage.updateWorkflowStatus(record.id, WorkflowStatus.Running).map { _ =>
+                record.copy(
+                  status = WorkflowStatus.Running,
+                  metadata = record.metadata.copy(activityIndex = record.metadata.activityIndex + 1)
+                )
+              }
+            case None =>
+              Future.successful(record)
+          }
+        else
+          Future.successful(record)
+      }
+
+      (suspended, running) = fixed.partition(_.status == WorkflowStatus.Suspended)
+      _ <- stateCoordinator.recoverWorkflows(fixed)
       // Re-register timers for suspended workflows
       _ <- Future.traverse(suspended) { record =>
         record.waitingForTimer match
@@ -536,7 +429,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
           .recover { case _ => () }
       }
     yield RecoveryReport(
-      activeWorkflows = workflows.size,
+      activeWorkflows = fixed.size,
       resumedSuspended = suspended.size,
       resumedRunning = running.size
     )

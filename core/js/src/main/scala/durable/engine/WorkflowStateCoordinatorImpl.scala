@@ -4,127 +4,269 @@ import java.time.Instant
 import scala.collection.mutable
 import scala.concurrent.{Future, ExecutionContext}
 
+import cps.*
+import cps.monads.FutureAsyncMonad
+
 import durable.*
 
 /**
  * JS implementation of WorkflowStateCoordinator.
  *
- * Since JavaScript is single-threaded, operations execute immediately
- * without needing coordination. All operations complete synchronously
- * wrapped in Future.successful.
+ * JavaScript is single-threaded, so in-memory operations don't need locks.
+ * However, storage operations are async and must be properly chained to
+ * ensure atomicity - we can't return until storage completes.
+ *
+ * Uses dotty-cps-async for clean async/await syntax that compiles to
+ * proper Future chaining.
  */
-class WorkflowStateCoordinatorImpl(using ec: ExecutionContext) extends WorkflowStateCoordinator:
+class WorkflowStateCoordinatorImpl(
+  storage: DurableStorageBackend
+)(using ec: ExecutionContext) extends WorkflowStateCoordinator:
 
   // Internal state - safe because JS is single-threaded
   private val activeMap = mutable.Map[WorkflowId, WorkflowRecord]()
   private val runnersMap = mutable.Map[WorkflowId, Future[WorkflowSessionResult[?]]]()
   private val timersMap = mutable.Map[WorkflowId, TimerHandle]()
 
-  // === Registration ===
+  /**
+   * Submit operation to coordinator.
+   * Returns Future that completes when operation (including storage) is done.
+   */
+  def submit[R](op: CoordinatorOp[R]): Future[R] =
+    executeOp(op)
 
-  def registerWorkflow(id: WorkflowId, record: WorkflowRecord): Future[Unit] =
-    activeMap.put(id, record)
-    Future.successful(())
+  /**
+   * Submit batch - execute sequentially.
+   */
+  def submitBatch(ops: Seq[CoordinatorOp[?]]): Future[Seq[?]] = async[Future] {
+    val results = mutable.ArrayBuffer[Any]()
+    for op <- ops do
+      results += await(executeOp(op))
+    results.toSeq
+  }
 
-  def registerRunner(id: WorkflowId, runner: Future[WorkflowSessionResult[?]]): Future[Unit] =
-    runnersMap.put(id, runner)
-    Future.successful(())
+  /**
+   * Read-only query (eventually consistent).
+   */
+  def getActive(id: WorkflowId): Option[WorkflowRecord] =
+    activeMap.get(id)
 
-  def registerTimer(id: WorkflowId, handle: TimerHandle): Future[Unit] =
-    timersMap.put(id, handle)
-    Future.successful(())
+  /**
+   * Execute operation - returns Future that completes when done.
+   */
+  private def executeOp[R](op: CoordinatorOp[R]): Future[R] =
+    op match
+      case CoordinatorOp.RegisterWorkflow(id, record) =>
+        activeMap.put(id, record)
+        Future.successful(())
 
-  // === State Transitions ===
+      case CoordinatorOp.RegisterRunner(id, runner) =>
+        runnersMap.put(id, runner)
+        Future.successful(())
 
-  def markFinished(id: WorkflowId): Future[Unit] =
+      case CoordinatorOp.RegisterTimer(id, handle) =>
+        timersMap.put(id, handle)
+        Future.successful(())
+
+      case CoordinatorOp.SuspendAndCheckPending(id, activityIndex, condition, eventStorages) =>
+        executeSuspendAndCheckPending(id, activityIndex, condition, eventStorages)
+
+      case CoordinatorOp.SendBroadcastEvent(eventName, event, eventId, timestamp, eventStorage) =>
+        executeSendBroadcastEvent(eventName, event, eventId, timestamp, eventStorage)
+
+      case CoordinatorOp.SendTargetedEvent(targetId, eventName, event, eventId, timestamp, policy, eventStorage) =>
+        executeSendTargetedEvent(targetId, eventName, event, eventId, timestamp, policy, eventStorage)
+
+      case CoordinatorOp.HandleTimerFired(workflowId, wakeAt, activityIndex, timeReachedStorage) =>
+        executeHandleTimerFired(workflowId, wakeAt, activityIndex, timeReachedStorage)
+
+      case CoordinatorOp.MarkFinished(id) =>
+        runnersMap.remove(id)
+        activeMap.remove(id)
+        Future.successful(())
+
+      case CoordinatorOp.CancelWorkflow(id) =>
+        Future.successful(executeCancelWorkflow(id))
+
+      case CoordinatorOp.UpdateForContinueAs(id, metadata) =>
+        activeMap.get(id).foreach { record =>
+          activeMap.put(id, record.copy(
+            metadata = metadata,
+            status = WorkflowStatus.Running,
+            updatedAt = Instant.now()
+          ).clearWaitConditions)
+        }
+        Future.successful(())
+
+      case CoordinatorOp.RecoverWorkflows(records) =>
+        records.foreach(r => activeMap.put(r.id, r))
+        Future.successful(())
+
+      case CoordinatorOp.CancelAllTimers() =>
+        val handles = timersMap.values.toSeq
+        handles.foreach(_.cancel())
+        timersMap.clear()
+        Future.successful(handles)
+
+      case CoordinatorOp.Shutdown() =>
+        Future.successful(())
+
+  private def updateInMemoryAfterDeliver(workflowId: WorkflowId, activityIndex: Int): Unit =
+    timersMap.remove(workflowId).foreach(_.cancel())
+    activeMap.updateWith(workflowId)(_.map(r => r.copy(
+      metadata = r.metadata.copy(activityIndex = activityIndex + 1),
+      status = WorkflowStatus.Running,
+      updatedAt = Instant.now()
+    ).clearWaitConditions))
+
+  // === Individual operation implementations ===
+
+  private def executeSuspendAndCheckPending(
+    id: WorkflowId,
+    activityIndex: Int,
+    condition: EventQuery.Combined[?, ?],
+    eventStorages: Map[String, DurableStorage[?, ?]]
+  ): Future[SuspendResult] = async[Future] {
     runnersMap.remove(id)
-    activeMap.remove(id)
-    Future.successful(())
+    val record = activeMap.getOrElse(id, throw new RuntimeException(s"Workflow $id not found"))
 
-  def markSuspended(id: WorkflowId, activityIndex: Int, condition: EventQuery.Combined[?, ?]): Future[Unit] =
-    runnersMap.remove(id)
-    activeMap.get(id).foreach { record =>
-      activeMap.put(id, record.copy(
-        metadata = record.metadata.copy(activityIndex = activityIndex),
-        status = WorkflowStatus.Suspended,
-        waitingForEvents = condition.eventNames,
-        waitingForTimer = condition.timerAt.map(_._1),
-        waitingForWorkflows = condition.workflows.keySet,
-        updatedAt = Instant.now()
-      ))
-    }
-    Future.successful(())
+    val updated = record.copy(
+      metadata = record.metadata.copy(activityIndex = activityIndex),
+      status = WorkflowStatus.Suspended,
+      waitingForEvents = condition.eventNames,
+      waitingForTimer = condition.timerAt.map(_._1),
+      waitingForWorkflows = condition.workflows.keySet,
+      updatedAt = Instant.now()
+    )
+    activeMap.put(id, updated)
 
-  def markResumed(id: WorkflowId, newActivityIndex: Int): Future[Option[WorkflowRecord]] =
-    // Cancel any pending timer
-    timersMap.remove(id).foreach(_.cancel())
+    val pendingEvent = await(findPendingEvent(id, condition))
 
-    val result = activeMap.get(id).map { record =>
-      val updated = record.copy(
-        metadata = record.metadata.copy(activityIndex = newActivityIndex),
-        status = WorkflowStatus.Running,
-        updatedAt = Instant.now()
-      ).clearWaitConditions
-      activeMap.put(id, updated)
-      record // Return original record
-    }
-    Future.successful(result)
+    pendingEvent match
+      case Some((eventName, pending, isTargeted)) =>
+        await(storage.deliverPendingEvent(
+          id, activityIndex, SingleEvent(eventName), pending.value,
+          eventStorages(eventName).asInstanceOf[DurableStorage[Any, DurableStorageBackend]],
+          pending.eventId, eventName, isTargeted
+        ))
+        updateInMemoryAfterDeliver(id, activityIndex)
+        SuspendResult.Delivered(updated, eventName)
 
-  def updateForContinueAs(id: WorkflowId, metadata: WorkflowMetadata): Future[Unit] =
-    activeMap.get(id).foreach { record =>
-      activeMap.put(id, record.copy(
-        metadata = metadata,
-        status = WorkflowStatus.Running,
-        updatedAt = Instant.now()
-      ).clearWaitConditions)
-    }
-    Future.successful(())
+      case None =>
+        await(storage.suspendWorkflow(
+          id, updated.metadata, condition.eventNames,
+          condition.timerAt.map(_._1), condition.workflows.keySet
+        ))
+        SuspendResult.Suspended
+  }
 
-  // === Queries with Actions ===
+  private def findPendingEvent(
+    id: WorkflowId,
+    condition: EventQuery.Combined[?, ?]
+  ): Future[Option[(String, PendingEvent[?], Boolean)]] = async[Future] {
+    val eventNames = condition.eventNames.toSeq
 
-  def findWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]] =
-    val result = activeMap.values.filter { record =>
-      record.status == WorkflowStatus.Suspended &&
-      record.isWaitingForEvent(eventName)
+    // Check targeted events first
+    var result: Option[(String, PendingEvent[?], Boolean)] = None
+    var i = 0
+    while i < eventNames.size && result.isEmpty do
+      val name = eventNames(i)
+      val events = await(storage.loadWorkflowPendingEvents(id, name))
+      if events.nonEmpty then
+        result = Some((name, events.head, true))
+      i += 1
+
+    // Then check broadcast events
+    i = 0
+    while i < eventNames.size && result.isEmpty do
+      val name = eventNames(i)
+      val events = await(storage.loadPendingEvents(name))
+      if events.nonEmpty then
+        result = Some((name, events.head, false))
+      i += 1
+
+    result
+  }
+
+  private def executeSendBroadcastEvent(
+    eventName: String,
+    event: Any,
+    eventId: EventId,
+    timestamp: Instant,
+    eventStorage: DurableStorage[?, ?]
+  ): Future[SendResult] = async[Future] {
+    val waiting = activeMap.values.filter { r =>
+      r.status == WorkflowStatus.Suspended && r.isWaitingForEvent(eventName)
     }.toSeq
-    Future.successful(result)
 
-  def getAndRemoveTimer(id: WorkflowId): Future[Option[WorkflowRecord]] =
-    timersMap.remove(id)
-    val result = activeMap.get(id).filter(_.status == WorkflowStatus.Suspended)
-    Future.successful(result)
+    if waiting.isEmpty then
+      await(storage.savePendingEvent(eventName, eventId, event, timestamp))
+      SendResult.Queued(eventId)
+    else
+      val target = waiting.head
+      val activityIndex = target.metadata.activityIndex
+      await(storage.deliverEvent(
+        target.id, activityIndex, SingleEvent(eventName), event,
+        eventStorage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+      ))
+      updateInMemoryAfterDeliver(target.id, activityIndex)
+      SendResult.Delivered(target.id)
+  }
 
-  def cancelWorkflow(id: WorkflowId): Future[Option[WorkflowRecord]] =
-    val result = activeMap.get(id).filter { r =>
-      r.status == WorkflowStatus.Running || r.status == WorkflowStatus.Suspended
-    }.map { record =>
+  private def executeSendTargetedEvent(
+    targetWorkflowId: WorkflowId,
+    eventName: String,
+    event: Any,
+    eventId: EventId,
+    timestamp: Instant,
+    policy: DeadLetterPolicy,
+    eventStorage: DurableStorage[?, ?]
+  ): Future[SendResult] = async[Future] {
+    activeMap.get(targetWorkflowId) match
+      case Some(record) if record.status.isTerminal =>
+        SendResult.TargetTerminated(record.status)
+
+      case Some(record) if record.status == WorkflowStatus.Suspended && record.isWaitingForEvent(eventName) =>
+        val activityIndex = record.metadata.activityIndex
+        await(storage.deliverEvent(
+          targetWorkflowId, activityIndex, SingleEvent(eventName), event,
+          eventStorage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+        ))
+        updateInMemoryAfterDeliver(targetWorkflowId, activityIndex)
+        SendResult.Delivered(targetWorkflowId)
+
+      case Some(_) =>
+        await(storage.saveWorkflowPendingEvent(targetWorkflowId, eventName, eventId, event, timestamp, policy))
+        SendResult.Queued(eventId)
+
+      case None =>
+        SendResult.TargetNotFound
+  }
+
+  private def executeHandleTimerFired(
+    workflowId: WorkflowId,
+    wakeAt: Instant,
+    activityIndex: Int,
+    timeReachedStorage: DurableStorage[TimeReached, ?]
+  ): Future[Option[WorkflowRecord]] = async[Future] {
+    timersMap.remove(workflowId)
+    activeMap.get(workflowId).filter(_.status == WorkflowStatus.Suspended) match
+      case Some(record) =>
+        val timeReached = TimeReached(scheduledAt = wakeAt, firedAt = Instant.now())
+        await(storage.deliverTimer(
+          workflowId, activityIndex, wakeAt, timeReached,
+          timeReachedStorage.asInstanceOf[DurableStorage[TimeReached, DurableStorageBackend]]
+        ))
+        updateInMemoryAfterDeliver(workflowId, activityIndex)
+        Some(record)
+      case None =>
+        None
+  }
+
+  private def executeCancelWorkflow(id: WorkflowId): Option[WorkflowRecord] =
+    activeMap.get(id).filter(r => r.status == WorkflowStatus.Running || r.status == WorkflowStatus.Suspended).map { record =>
       timersMap.remove(id).foreach(_.cancel())
       activeMap.remove(id)
       runnersMap.remove(id)
       record
     }
-    Future.successful(result)
-
-  // === Bulk Operations ===
-
-  def recoverWorkflows(records: Seq[WorkflowRecord]): Future[Unit] =
-    records.foreach { record =>
-      activeMap.put(record.id, record)
-    }
-    Future.successful(())
-
-  def cancelAllTimers(): Future[Seq[TimerHandle]] =
-    val handles = timersMap.values.toSeq
-    handles.foreach(_.cancel())
-    timersMap.clear()
-    Future.successful(handles)
-
-  // === Read-Only Queries ===
-
-  def getActive(id: WorkflowId): Option[WorkflowRecord] =
-    activeMap.get(id)
-
-  // === Lifecycle ===
-
-  def shutdown(): Future[Unit] =
-    Future.successful(())

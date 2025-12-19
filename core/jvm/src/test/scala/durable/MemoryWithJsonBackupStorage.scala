@@ -263,6 +263,104 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
     }
     Future.successful(result)
 
+  // Composite operations - simple sequential implementations
+  // These need to store data in same format as DurableStorage typeclass
+  def deliverEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    storeWinningCondition(workflowId, activityIndex, winningCondition)
+    // Store via the provided storage typeclass to maintain format compatibility
+    eventStorage.asInstanceOf[DurableStorage[E, MemoryWithJsonBackupStorage]]
+      .storeStep(this, workflowId, activityIndex, eventValue)
+    workflows.get(workflowId.value).foreach { record =>
+      workflows.put(workflowId.value, record.copy(
+        status = "Running",
+        waitConditionType = None,
+        waitConditionData = None,
+        updatedAt = Instant.now().toString
+      ))
+    }
+    Future.successful(())
+
+  def deliverPendingEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend],
+    pendingEventId: EventId,
+    eventName: String,
+    isTargeted: Boolean
+  ): Future[Unit] =
+    storeWinningCondition(workflowId, activityIndex, winningCondition)
+    // Store via the provided storage typeclass to maintain format compatibility
+    eventStorage.asInstanceOf[DurableStorage[E, MemoryWithJsonBackupStorage]]
+      .storeStep(this, workflowId, activityIndex, eventValue)
+    workflows.get(workflowId.value).foreach { record =>
+      workflows.put(workflowId.value, record.copy(
+        status = "Running",
+        waitConditionType = None,
+        waitConditionData = None,
+        updatedAt = Instant.now().toString
+      ))
+    }
+    if isTargeted then
+      removeWorkflowPendingEvent(workflowId, eventName, pendingEventId)
+    else
+      removePendingEvent(eventName, pendingEventId)
+
+  def suspendWorkflow(
+    workflowId: WorkflowId,
+    metadata: WorkflowMetadata,
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
+  ): Future[Unit] =
+    workflows.get(workflowId.value).foreach { record =>
+      val (condType, condData) =
+        if waitingForTimer.isDefined then
+          (Some("Timer"), waitingForTimer.map(_.toString))
+        else if waitingForEvents.nonEmpty then
+          (Some("Event"), Some(waitingForEvents.mkString(",")))
+        else if waitingForWorkflows.nonEmpty then
+          (Some("Workflow"), Some(waitingForWorkflows.map(_.value).mkString(",")))
+        else
+          (None, None)
+      workflows.put(workflowId.value, record.copy(
+        activityIndex = metadata.activityIndex,
+        status = "Suspended",
+        waitConditionType = condType,
+        waitConditionData = condData,
+        updatedAt = Instant.now().toString
+      ))
+    }
+    Future.successful(())
+
+  def deliverTimer(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    wakeAt: Instant,
+    timeReached: TimeReached,
+    timeReachedStorage: DurableStorage[TimeReached, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    storeWinningCondition(workflowId, activityIndex, TimerInstant(wakeAt))
+    // Store via the provided storage typeclass to maintain format compatibility
+    timeReachedStorage.asInstanceOf[DurableStorage[TimeReached, MemoryWithJsonBackupStorage]]
+      .storeStep(this, workflowId, activityIndex, timeReached)
+    workflows.get(workflowId.value).foreach { record =>
+      workflows.put(workflowId.value, record.copy(
+        status = "Running",
+        waitConditionType = None,
+        waitConditionData = None,
+        updatedAt = Instant.now().toString
+      ))
+    }
+    Future.successful(())
+
   // Backup/Restore
 
   /** Save all state to JSON file */

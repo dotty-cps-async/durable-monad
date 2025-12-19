@@ -17,7 +17,7 @@ trait WorkflowEnginePlatform:
     storage: S,
     config: WorkflowEngineConfig
   )(using ExecutionContext, DurableStorage[TimeReached, S]): WorkflowEngine[S] =
-    val stateCoordinator = new WorkflowStateCoordinatorImpl()
+    val stateCoordinator = new WorkflowStateCoordinatorImpl(storage)
     new CoordinatorWorkflowEngineImpl[S](
       storage,
       stateCoordinator,

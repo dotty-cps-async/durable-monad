@@ -137,6 +137,46 @@ class JsonFileStorage(val baseDir: Path) extends DurableStorageBackend:
   def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
 
+  // Composite operations - not implemented for this test storage
+  def deliverEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def deliverPendingEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend],
+    pendingEventId: EventId,
+    eventName: String,
+    isTargeted: Boolean
+  ): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def suspendWorkflow(
+    workflowId: WorkflowId,
+    metadata: WorkflowMetadata,
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
+  ): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def deliverTimer(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    wakeAt: Instant,
+    timeReached: TimeReached,
+    timeReachedStorage: DurableStorage[TimeReached, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
   /** Store workflow metadata (local JSON format) */
   def storeMetadata(workflowId: WorkflowId, metadata: JsonWorkflowMetadata): Unit =
     val file = workflowDir(workflowId).resolve("metadata.json")

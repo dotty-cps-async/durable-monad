@@ -14,9 +14,12 @@ trait TimerHandle:
 /**
  * Coordinator for workflow state operations.
  *
- * Owns the in-memory state and provides named operations that are
- * serialized to prevent race conditions. All state-mutating operations
- * go through this trait.
+ * Owns the in-memory state and provides operations that are serialized
+ * to prevent race conditions. All state-mutating operations go through
+ * the submit method which executes operations on a single-threaded executor.
+ *
+ * The coordinator combines in-memory state management with blocking storage
+ * calls to ensure atomicity of check-then-act sequences.
  *
  * Platform implementations:
  * - JVM: Uses single-threaded executor for serialization
@@ -25,69 +28,62 @@ trait TimerHandle:
  */
 trait WorkflowStateCoordinator:
 
-  // === Registration ===
-
-  /** Register a new workflow as active */
-  def registerWorkflow(id: WorkflowId, record: WorkflowRecord): Future[Unit]
-
-  /** Register the runner future for a workflow */
-  def registerRunner(id: WorkflowId, runner: Future[WorkflowSessionResult[?]]): Future[Unit]
-
-  /** Register a timer handle for a workflow */
-  def registerTimer(id: WorkflowId, handle: TimerHandle): Future[Unit]
-
-  // === State Transitions ===
-
-  /** Mark workflow as finished (completed or failed) - removes from active state */
-  def markFinished(id: WorkflowId): Future[Unit]
+  /**
+   * Submit operation to coordinator queue.
+   * Returns Future that completes when operation is processed.
+   *
+   * This is the primary method for all state-changing operations.
+   * Operations are executed sequentially on a dedicated thread to
+   * prevent race conditions.
+   */
+  def submit[R](op: CoordinatorOp[R]): Future[R]
 
   /**
-   * Mark workflow as suspended with the given wait condition.
-   * Removes runner, updates record to Suspended status.
+   * Submit batch of operations for potential fusion.
+   * Operations may be reordered/combined if safe.
    */
-  def markSuspended(id: WorkflowId, activityIndex: Int, condition: EventQuery.Combined[?, ?]): Future[Unit]
+  def submitBatch(ops: Seq[CoordinatorOp[?]]): Future[Seq[?]]
 
   /**
-   * Mark workflow as resumed (transition to Running).
-   * Cancels any pending timer, updates record.
-   * Returns the record if workflow was found and updated.
+   * Read-only query (eventually consistent, no queue).
+   * This method can be called from any thread without synchronization.
    */
-  def markResumed(id: WorkflowId, newActivityIndex: Int): Future[Option[WorkflowRecord]]
-
-  /** Update workflow for continue-as operation */
-  def updateForContinueAs(id: WorkflowId, metadata: WorkflowMetadata): Future[Unit]
-
-  // === Queries with Actions ===
-
-  /** Find all workflows waiting for a specific event */
-  def findWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]]
-
-  /**
-   * Get active workflow if suspended and remove its timer.
-   * Used by timer callback to atomically check and prepare for resume.
-   */
-  def getAndRemoveTimer(id: WorkflowId): Future[Option[WorkflowRecord]]
-
-  /**
-   * Cancel a workflow - removes from active state.
-   * Returns the record if workflow was found and cancelled.
-   */
-  def cancelWorkflow(id: WorkflowId): Future[Option[WorkflowRecord]]
-
-  // === Bulk Operations ===
-
-  /** Register multiple workflows recovered from storage */
-  def recoverWorkflows(records: Seq[WorkflowRecord]): Future[Unit]
-
-  /** Cancel all timers - returns handles that were cancelled */
-  def cancelAllTimers(): Future[Seq[TimerHandle]]
-
-  // === Read-Only Queries (eventually consistent) ===
-
-  /** Get active workflow record (read-only, may be stale) */
   def getActive(id: WorkflowId): Option[WorkflowRecord]
 
-  // === Lifecycle ===
+  // === Legacy API (convenience wrappers around submit) ===
+
+  /** Register a new workflow as active */
+  def registerWorkflow(id: WorkflowId, record: WorkflowRecord): Future[Unit] =
+    submit(CoordinatorOp.RegisterWorkflow(id, record))
+
+  /** Register the runner future for a workflow */
+  def registerRunner(id: WorkflowId, runner: Future[WorkflowSessionResult[?]]): Future[Unit] =
+    submit(CoordinatorOp.RegisterRunner(id, runner))
+
+  /** Register a timer handle for a workflow */
+  def registerTimer(id: WorkflowId, handle: TimerHandle): Future[Unit] =
+    submit(CoordinatorOp.RegisterTimer(id, handle))
+
+  /** Mark workflow as finished (completed or failed) - removes from active state */
+  def markFinished(id: WorkflowId): Future[Unit] =
+    submit(CoordinatorOp.MarkFinished(id))
+
+  /** Update workflow for continue-as operation */
+  def updateForContinueAs(id: WorkflowId, metadata: WorkflowMetadata): Future[Unit] =
+    submit(CoordinatorOp.UpdateForContinueAs(id, metadata))
+
+  /** Cancel a workflow - removes from active state */
+  def cancelWorkflow(id: WorkflowId): Future[Option[WorkflowRecord]] =
+    submit(CoordinatorOp.CancelWorkflow(id))
+
+  /** Register multiple workflows recovered from storage */
+  def recoverWorkflows(records: Seq[WorkflowRecord]): Future[Unit] =
+    submit(CoordinatorOp.RecoverWorkflows(records))
+
+  /** Cancel all timers - returns handles that were cancelled */
+  def cancelAllTimers(): Future[Seq[TimerHandle]] =
+    submit(CoordinatorOp.CancelAllTimers())
 
   /** Shutdown the coordinator */
-  def shutdown(): Future[Unit]
+  def shutdown(): Future[Unit] =
+    submit(CoordinatorOp.Shutdown())

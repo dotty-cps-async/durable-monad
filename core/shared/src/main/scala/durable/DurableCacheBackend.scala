@@ -96,6 +96,70 @@ trait DurableStorageBackend:
   /** Load a specific dead event by ID (across all event names) */
   def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]]
 
+  // === Composite operations for atomic persistence ===
+
+  /**
+   * Atomically deliver event to workflow (single DB transaction):
+   * - Store winning condition
+   * - Store event value at activity index
+   * - Update workflow status to Running
+   *
+   * Database impl: single transaction
+   * Memory impl: sequential operations (coordinator already single-threaded)
+   */
+  def deliverEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit]
+
+  /**
+   * Atomically deliver pending event and remove from queue:
+   * - Store winning condition
+   * - Store event value
+   * - Update status to Running
+   * - Remove from pending queue (broadcast or targeted)
+   */
+  def deliverPendingEvent[E](
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    winningCondition: SingleEventQuery[?],
+    eventValue: E,
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend],
+    pendingEventId: EventId,
+    eventName: String,
+    isTargeted: Boolean
+  ): Future[Unit]
+
+  /**
+   * Atomically suspend workflow:
+   * - Save workflow metadata
+   * - Update status to Suspended with wait conditions
+   */
+  def suspendWorkflow(
+    workflowId: WorkflowId,
+    metadata: WorkflowMetadata,
+    waitingForEvents: Set[String],
+    waitingForTimer: Option[Instant],
+    waitingForWorkflows: Set[WorkflowId]
+  ): Future[Unit]
+
+  /**
+   * Atomically deliver timer to workflow:
+   * - Store winning condition (TimerInstant)
+   * - Store TimeReached value
+   * - Update status to Running
+   */
+  def deliverTimer(
+    workflowId: WorkflowId,
+    activityIndex: Int,
+    wakeAt: Instant,
+    timeReached: TimeReached,
+    timeReachedStorage: DurableStorage[TimeReached, ? <: DurableStorageBackend]
+  ): Future[Unit]
+
 /**
  * Pure typeclass for caching durable computation results.
  *
