@@ -141,6 +141,46 @@ async[Durable] {
 
 `await` marks: "workflow waits here for external input"
 
+### 3. Ephemeral Resources (non-cacheable)
+
+Resources that cannot be serialized but need lifecycle management. The preprocessor auto-detects types with `DurableEphemeral[R]` and wraps them in `WithSessionResource` for automatic release.
+
+```scala
+// Define ephemeral resource typeclass
+given DurableEphemeral[FileHandle] = DurableEphemeral(_.close())
+
+async[Durable] {
+  val file = openFile("data.txt")  // Auto-detected as ephemeral
+  val content = file.read()         // Activity - cached
+  content
+}  // file.close() called automatically at scope end
+```
+
+**How it works:**
+- Preprocessor checks if `DurableEphemeral[R]` exists for val's type
+- If found, wraps remaining code in `WithSessionResource(acquire, release)(use)`
+- Resource is acquired fresh on each run/resume (NOT cached)
+- Release is called at end of scope (success, failure, or suspension)
+
+**Explicit bracket pattern:**
+
+```scala
+async[Durable] {
+  await(Durable.withResource(
+    acquire = openConnection(),
+    release = _.close()
+  ) { conn =>
+    Durable.activitySync { conn.query("SELECT ...") }
+  })
+}
+```
+
+**Use cases:**
+- File handles: release closes the file
+- Database transactions: release rolls back if not committed
+- Network connections: release closes the connection
+- Scoped locks: release unlocks
+
 ### Summary Table
 
 | Operation Type | Direction | Await? | On Replay | On Failure |
@@ -149,6 +189,7 @@ async[Durable] {
 | Activity (sync) | Outbound | No | Return cached | Retry if recoverable |
 | Activity (async) | Outbound | No (at assignment) | Return cached or restart | Retry if recoverable |
 | External call | Inbound | Yes | Skip wait, return cached | Workflow-level handling |
+| Ephemeral resource | - | No | Acquire fresh | Release called |
 
 ## Cache Key Strategy
 
