@@ -614,6 +614,70 @@ val ctx = RunContext.fresh(WorkflowId("order-123"), config)
 - `defaultIsRecoverable` excludes `InterruptedException`, `VirtualMachineError`, `LinkageError`
 - Exceptions wrapped in `ExecutionException` are unwrapped before checking recoverability
 
+### Environment/Resource Access
+
+Workflows often need access to environment resources (database connections, HTTP clients, external services). These resources are fundamentally different from activity results:
+
+| Category | Journaled? | On Resume | Example |
+|----------|------------|-----------|---------|
+| **Activities** | YES | Return cached result | `httpGet(url)`, `db.query(sql)` |
+| **Environment Access** | NO | Acquire fresh | `getDatabase`, `getHttpClient` |
+
+Resources are ephemeral (connections cannot be serialized) but the operations using them (activities) are cached.
+
+**Getting global resources from AppContext:**
+
+```scala
+import com.github.rssh.appcontext.*
+
+// Define provider for your resource
+given AppContextProvider[Database] = new AppContextProvider[Database]:
+  def get: Database = Database.connect(config.url)
+
+// In workflow - resource is cached in AppContext, fresh on each run
+async[Durable] {
+  val db = await(Durable.env[Database])  // Not journaled - acquired fresh
+  val result = db.query("SELECT ...")     // Activity - cached
+}
+```
+
+**Scoped resources with bracket pattern:**
+
+```scala
+async[Durable] {
+  await(Durable.withResource(
+    acquire = openFile("data.csv"),
+    release = _.close()
+  ) { file =>
+    Durable.activitySync { processFile(file) }
+  })  // file.close() called automatically
+}
+```
+
+**Key design principles:**
+- `RunContext` contains `AppContext.Cache` for environment resources
+- `Durable.env[R]` gets resource from AppContext (cached globally, no release)
+- `Durable.withResource` provides bracket semantics (acquire/use/release)
+- Resource acquisition is NOT journaled - on resume, resources are acquired fresh
+- Only the results of operations USING resources (activities) are cached
+
+**Engine configuration:**
+
+```scala
+// Engine shares AppContext across all workflows
+val config = WorkflowEngineConfig(
+  runConfig = RunConfig.default,
+  appContext = AppContext.newCache  // Fresh on engine restart
+)
+val engine = WorkflowEngine(storage, config)
+
+// On restart - create fresh AppContext for fresh resources
+def restart(): Unit =
+  val freshConfig = WorkflowEngineConfig(appContext = AppContext.newCache)
+  val engine = WorkflowEngine(storage, freshConfig)
+  engine.recover()  // Workflows resume with fresh resources
+```
+
 ### Compile-Time Check
 
 At each `val` definition, the macro generates code that requires `DurableStorage[T, S]`:

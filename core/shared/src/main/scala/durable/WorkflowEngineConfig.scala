@@ -1,12 +1,18 @@
 package durable
 
+import com.github.rssh.appcontext.*
+
 /**
  * Configuration for WorkflowEngine.
  *
  * @param runConfig Configuration passed to WorkflowSessionRunner for each workflow
+ * @param appContext Application context cache for environment resources.
+ *                   Shared across all workflows in this engine.
+ *                   Create fresh on engine restart to get fresh resources.
  */
 case class WorkflowEngineConfig(
-  runConfig: RunConfig = RunConfig.default
+  runConfig: RunConfig = RunConfig.default,
+  appContext: AppContext.Cache = AppContext.newCache
 )
 
 object WorkflowEngineConfig:

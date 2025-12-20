@@ -302,3 +302,126 @@ class DurablePreprocessorTest extends FunSuite:
       }
     }
   }
+
+  // ============================================================
+  // Tests for preprocessor resource detection (DurableEphemeral)
+  // ============================================================
+
+  // Test resource type with DurableEphemeral
+  class TestResource(val id: Int):
+    var released: Boolean = false
+    def release(): Unit = released = true
+    def compute(x: Int): Int = x * id
+
+  test("preprocessor auto-wraps val with DurableEphemeral in WithSessionResource") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("preprocess-resource-1")
+    val ctx = RunContext.fresh(workflowId)
+
+    var releaseCount = 0
+
+    // Only release is provided - user's expression is used for acquisition
+    given DurableEphemeral[TestResource] = DurableEphemeral(
+      r => { releaseCount += 1; r.release() }
+    )
+
+    val workflow = async[Durable] {
+      val resource: TestResource = new TestResource(42)  // User's expression - id=42
+      val result = resource.compute(10)  // This should be wrapped as activity
+      result
+    }
+
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, 420))  // 42 * 10 = 420
+      assertEquals(releaseCount, 1)
+    }
+  }
+
+  test("ephemeral resource is acquired fresh on replay, activities are cached") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("preprocess-resource-replay")
+
+    var releaseCount = 0
+    var computeCount = 0
+
+    given DurableEphemeral[TestResource] = DurableEphemeral(
+      r => { releaseCount += 1; r.release() }
+    )
+
+    val workflow = async[Durable] {
+      val resource: TestResource = new TestResource(5)  // User's expression
+      val result = { computeCount += 1; resource.compute(10) }  // Activity - cached
+      result
+    }
+
+    // First run
+    val ctx1 = RunContext.fresh(workflowId)
+    WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 50))  // 5 * 10 = 50
+      assertEquals(releaseCount, 1)
+      assertEquals(computeCount, 1)
+
+      // Reset counts
+      releaseCount = 0
+      computeCount = 0
+
+      // Replay - resource created fresh (user expression runs), but activity cached
+      val ctx2 = RunContext.resume(workflowId, 1)  // 1 cached activity
+      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+        assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 50))  // Same cached result
+        assertEquals(releaseCount, 1)  // Resource released
+        assertEquals(computeCount, 0)  // Activity NOT re-executed - cached
+      }
+    }
+  }
+
+  test("multiple ephemeral resource vals nest correctly") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("preprocess-resource-nested")
+    val ctx = RunContext.fresh(workflowId)
+
+    var releaseOrder: List[Int] = Nil
+
+    given DurableEphemeral[TestResource] = DurableEphemeral(
+      r => { releaseOrder = releaseOrder :+ r.id; r.release() }
+    )
+
+    val workflow = async[Durable] {
+      val r1: TestResource = new TestResource(1)
+      val r2: TestResource = new TestResource(2)
+      val result = r1.compute(r2.compute(5))
+      result
+    }
+
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, 10))  // 1 * (2 * 5) = 10
+      // Should release in reverse order (inner first)
+      assertEquals(releaseOrder, List(2, 1))
+    }
+  }
+
+  test("ephemeral resource and non-resource vals work together") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("preprocess-mixed-vals")
+    val ctx = RunContext.fresh(workflowId)
+
+    var releaseCount = 0
+
+    given DurableEphemeral[TestResource] = DurableEphemeral(
+      r => { releaseCount += 1; r.release() }
+    )
+
+    val workflow = async[Durable] {
+      val x = 10  // Regular val - wrapped as activity
+      val resource: TestResource = new TestResource(3)  // Ephemeral resource - user's expression
+      val y = 5   // Regular val inside resource scope
+      val result = resource.compute(x + y)
+      result
+    }
+
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, 45))  // 3 * (10 + 5) = 45
+      assertEquals(releaseCount, 1)
+    }
+  }
+

@@ -5,6 +5,7 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.{Try, Success, Failure}
 import java.time.Instant
 import cps.*
+import com.github.rssh.appcontext.*
 
 /**
  * Durable[A] - A Monad describing a durable computation.
@@ -106,6 +107,32 @@ enum Durable[A]:
     wrapper: DurableAsync[F]
   ) extends Durable[F[T]]
 
+  /**
+   * Resource acquisition with bracket semantics - NOT journaled.
+   *
+   * This case handles both environment access and scoped resources through a unified pattern.
+   * The key insight: all resource patterns are acquire/use/release with different scoping:
+   *   - `env[R]`: acquire from AppContext cache, no release, use = pure(r)
+   *   - `withResource`: custom acquire/release, scoped use
+   *   - `withEnv`: acquire/release from provider, scoped use
+   *
+   * Resource acquisition is NOT cached in the workflow journal because:
+   *   - Resources are ephemeral (connections, clients) and cannot be serialized
+   *   - On resume, resources must be acquired fresh
+   *   - Only the results of operations USING resources (activities) are cached
+   *
+   * @tparam R Resource type
+   * @tparam B Result type from using the resource
+   * @param acquire Function to acquire the resource (has access to RunContext for appContext)
+   * @param release Function to release the resource after use
+   * @param use Function that uses the resource and returns a Durable workflow
+   */
+  case WithSessionResource[R, B](
+    acquire: RunContext => R,
+    release: R => Unit,
+    use: R => Durable[B]
+  ) extends Durable[B]
+
   def map[B](f: A => B): Durable[B] =
     Durable.FlatMap(this, (a: A) => Durable.Pure(f(a)))
 
@@ -125,6 +152,101 @@ object Durable:
   /** Local computation - sync, deterministic, no caching */
   def local[A](compute: RunContext => A): Durable[A] =
     LocalComputation(compute)
+
+  /**
+   * Get a resource from AppContext cache.
+   *
+   * Resources accessed via `env` are:
+   *   - Cached globally in AppContext (shared across workflows)
+   *   - Not released (no cleanup needed for pooled/global resources)
+   *   - Acquired fresh on each workflow start/resume (not journaled)
+   *
+   * Example:
+   * {{{
+   * async[Durable] {
+   *   val db = await(Durable.env[Database])  // From global pool
+   *   db.query("SELECT ...")                  // Activity - cached
+   * }
+   * }}}
+   *
+   * @tparam R Resource type (must have AppContextProvider instance)
+   * @return Durable workflow that yields the resource
+   */
+  inline def env[R](using provider: AppContextProvider[R]): Durable[R] =
+    WithSessionResource[R, R](
+      acquire = ctx => ctx.appContext.getOrCreate[R](provider.get),
+      release = _ => (),  // No release for cached resources
+      use = r => Durable.pure(r)
+    )
+
+  /**
+   * Scoped resource with explicit acquire/release (bracket pattern).
+   *
+   * The resource is:
+   *   - Acquired at the start of the bracket
+   *   - Released at the end (success or failure)
+   *   - NOT journaled (ephemeral)
+   *
+   * Example:
+   * {{{
+   * async[Durable] {
+   *   await(Durable.withResource(
+   *     acquire = openFile("data.csv"),
+   *     release = _.close()
+   *   ) { file =>
+   *     Durable.activitySync { processFile(file) }
+   *   })
+   * }
+   * }}}
+   *
+   * @tparam R Resource type
+   * @tparam A Result type
+   * @param acquire Function to acquire the resource
+   * @param release Function to release the resource
+   * @param use Function that uses the resource and returns a Durable workflow
+   * @return Durable workflow that manages the resource lifecycle
+   */
+  def withResource[R, A](acquire: => R, release: R => Unit)(use: R => Durable[A]): Durable[A] =
+    WithSessionResource[R, A](
+      acquire = _ => acquire,
+      release = release,
+      use = use
+    )
+
+  /**
+   * Sync version of withResource - use function returns A, not Durable[A].
+   * Used by preprocessor when transforming ephemeral resource vals.
+   *
+   * When used inside async[Durable] blocks with await calls in the use function,
+   * dotty-cps-async will automatically substitute this with withResourceSync_async.
+   */
+  def withResourceSync[R, A](acquire: => R, release: R => Unit)(use: R => A): Durable[A] =
+    WithSessionResource[R, A](
+      acquire = _ => acquire,
+      release = release,
+      use = r => Durable.pure(use(r))
+    )
+
+  /**
+   * Async version of withResourceSync - called by dotty-cps-async when use function contains awaits.
+   * The signature matches CPS-transformed parameters:
+   *   - acquire: => R becomes () => Durable[R]
+   *   - release: R => Unit becomes R => Durable[Unit]
+   *   - use: R => A becomes R => Durable[A]
+   *
+   * Uses FlatMapTry to ensure release is called on both success and failure (bracket semantics).
+   */
+  def withResourceSync_async[R, A](acquire: () => Durable[R], release: R => Durable[Unit])(use: R => Durable[A]): Durable[A] =
+    import scala.util.{Try, Success, Failure}
+    acquire().flatMap { r =>
+      FlatMapTry[A, A](
+        use(r),
+        (result: Try[A]) => result match {
+          case Success(a) => release(r).map(_ => a)
+          case Failure(e) => release(r).flatMap(_ => Durable.failed(e))
+        }
+      )
+    }
 
   /**
    * Create an activity - async operation that will be cached.

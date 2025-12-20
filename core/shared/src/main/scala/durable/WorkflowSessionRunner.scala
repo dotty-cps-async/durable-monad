@@ -6,6 +6,7 @@ import scala.util.{Try, Success, Failure}
 import scala.util.control.NonFatal
 
 import durable.runtime.Scheduler
+import com.github.rssh.appcontext.*
 
 /**
  * Stack frame types for the interpreter.
@@ -130,6 +131,9 @@ object WorkflowSessionRunner:
           continueAs.storeArgs,
           continueAs.workflow
         ).asInstanceOf[WorkflowSessionResult[A]])
+
+      case wr: Durable.WithSessionResource[r, b] =>
+        handleWithSessionResource[A, r, b](wr, ctx, state, stack)
 
   /**
    * Continue with a result (success or failure), applying the next continuation from the stack.
@@ -341,6 +345,39 @@ object WorkflowSessionRunner:
     continueWith(Success(resultF), ctx, state, stack)
 
   /**
+   * Handle WithSessionResource - acquire resource, run inner workflow, release.
+   *
+   * Resource acquisition is NOT journaled because:
+   *   - Resources are ephemeral (connections, clients) and cannot be serialized
+   *   - On resume, resources must be acquired fresh
+   *   - Only the results of operations USING resources (activities) are cached
+   *
+   * The bracket pattern ensures release is called on success, failure, or suspension.
+   */
+  private def handleWithSessionResource[A, R, B](
+    wr: Durable.WithSessionResource[R, B],
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+    // No index increment - resource acquisition is NOT journaled
+    try
+      val resource = wr.acquire(ctx)
+      // Run inner workflow with resource
+      stepsUntilSuspend(wr.use(resource), ctx, state, stack).transform { result =>
+        // Release resource after workflow completes (success or failure)
+        try
+          wr.release(resource)
+        catch
+          case NonFatal(_) => () // Ignore release errors, preserve original result
+        result
+      }
+    catch
+      case NonFatal(e) =>
+        // Acquire failed - no resource to release, propagate error
+        continueWith(Failure(e), ctx, state, stack)
+
+  /**
    * Execute activity computation with retry logic.
    *
    * @param compute The activity computation
@@ -435,6 +472,7 @@ object RunConfig:
  *
  * @param workflowId Unique identifier for this workflow instance
  * @param backend Storage backend instance (passed to storage typeclass methods)
+ * @param appContext Application context cache for environment resources (fresh on each start/resume)
  * @param resumeFromIndex Activity index to resume from (0 = fresh start, indices < this are replayed)
  * @param activityOffset Starting index for activity assignment (to skip stored args when run via engine)
  * @param config Runner configuration (logging, scheduling)
@@ -442,6 +480,7 @@ object RunConfig:
 case class RunContext(
   workflowId: WorkflowId,
   backend: DurableStorageBackend,
+  appContext: AppContext.Cache,
   resumeFromIndex: Int,
   activityOffset: Int = 0,
   config: RunConfig = RunConfig.default
@@ -450,27 +489,27 @@ case class RunContext(
 object RunContext:
   /** Create a fresh context for new workflow execution */
   def fresh(workflowId: WorkflowId)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, resumeFromIndex = 0)
+    RunContext(workflowId, backend, AppContext.newCache, resumeFromIndex = 0)
 
   /** Create a fresh context with custom configuration */
-  def fresh(workflowId: WorkflowId, config: RunConfig)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, resumeFromIndex = 0, config = config)
+  def fresh(workflowId: WorkflowId, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
+    RunContext(workflowId, backend, appContext, resumeFromIndex = 0, config = config)
 
   /** Create a context for resuming from a specific index */
   def resume(workflowId: WorkflowId, resumeFromIndex: Int)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, resumeFromIndex)
+    RunContext(workflowId, backend, AppContext.newCache, resumeFromIndex)
 
   /** Create a context for resuming with custom configuration */
-  def resume(workflowId: WorkflowId, resumeFromIndex: Int, config: RunConfig)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, resumeFromIndex, config = config)
+  def resume(workflowId: WorkflowId, resumeFromIndex: Int, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
+    RunContext(workflowId, backend, appContext, resumeFromIndex, config = config)
 
   /** Create a context for resuming from snapshot */
   def fromSnapshot(snapshot: DurableSnapshot)(using backend: DurableStorageBackend): RunContext =
-    RunContext(snapshot.workflowId, backend, snapshot.activityIndex)
+    RunContext(snapshot.workflowId, backend, AppContext.newCache, snapshot.activityIndex)
 
   /** Create a context for resuming from snapshot with custom configuration */
-  def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig)(using backend: DurableStorageBackend): RunContext =
-    RunContext(snapshot.workflowId, backend, snapshot.activityIndex, config = config)
+  def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
+    RunContext(snapshot.workflowId, backend, appContext, snapshot.activityIndex, config = config)
 
 
 /**

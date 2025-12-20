@@ -7,6 +7,7 @@ import java.time.{Instant, Duration}
 import durable.*
 import durable.engine.{WorkflowStateCoordinator, TestHooks, TimerHandle, CoordinatorOp, SuspendResult, SendResult}
 import durable.runtime.Scheduler
+import com.github.rssh.appcontext.*
 
 /**
  * WorkflowEngine implementation using WorkflowStateCoordinator.
@@ -63,7 +64,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     activityOffset: Int,
     resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
-    val ctx = RunContext(workflowId, storage, resumeFromIndex, activityOffset, config.runConfig)
+    val ctx = RunContext(workflowId, storage, config.appContext, resumeFromIndex, activityOffset, config.runConfig)
     val runnerFuture = WorkflowSessionRunner.run(workflow, ctx)
     stateCoordinator.registerRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
 
@@ -169,7 +170,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     activityOffset: Int,
     resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
-    val ctx = RunContext(workflowId, storage, resumeFromIndex, activityOffset, config.runConfig)
+    val ctx = RunContext(workflowId, storage, config.appContext, resumeFromIndex, activityOffset, config.runConfig)
     val runnerFuture = WorkflowSessionRunner.run(workflow, ctx)
     stateCoordinator.registerRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
 

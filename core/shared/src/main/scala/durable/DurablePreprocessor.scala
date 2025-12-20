@@ -12,6 +12,10 @@ import cps.*
  * Also wraps conditions in if/match for deterministic replay:
  *   if (cond) ...  →  if (await(ctx.activitySync { cond })) ...
  *
+ * Resource handling:
+ *   - When val has DurableEphemeral[T], wraps rest of block in WithSessionResource
+ *   - val file: FileHandle = openFile("x") → await(Durable.withResourceSync(openFile("x"), release){ file => restOfBlock })
+ *
  * Transformation scope:
  *   - Transforms top-level vals and control flow
  *   - DOES NOT transform inside lambdas (x => ...) - treated as atomic
@@ -395,8 +399,167 @@ object DurablePreprocessor:
       tpe <:< TypeRepr.of[Throwable]
 
     /**
+     * TreeMap to substitute symbol references.
+     * Used when restructuring blocks for resource vals.
+     */
+    class SymbolSubstitutor(from: Symbol, to: Symbol) extends TreeMap:
+      override def transformTerm(term: Term)(owner: Symbol): Term =
+        term match
+          case ident: Ident if ident.symbol == from =>
+            Ref(to)
+          case _ =>
+            super.transformTerm(term)(owner)
+
+    /**
+     * Process block statements, detecting resource vals and restructuring.
+     * When a val has WorkflowSessionResource[T], wraps the rest of the block in WithSessionResource.
+     */
+    def transformBlockStatements(stats: List[Statement], expr: Term, isReturnPosition: Boolean): Term =
+      stats match
+        case Nil =>
+          transformTopLevel(expr, isReturnPosition)
+
+        case (vd @ ValDef(name, tpt, Some(rhs))) :: rest =>
+          val valType = widenAll(tpt.tpe)
+          val ephemeralType = TypeRepr.of[DurableEphemeral].appliedTo(valType)
+
+          Implicits.search(ephemeralType) match
+            case iss: ImplicitSearchSuccess =>
+              // This is an ephemeral resource val - wrap rest of block in WithSessionResource
+              wrapWithEphemeralResource(vd, rhs, rest, expr, valType, iss.tree, isReturnPosition)
+
+            case _ =>
+              // Not a resource - normal activity wrapping, then continue
+              val wrappedRhs = wrapWithActivity(rhs)
+              val transformedVal = ValDef.copy(vd)(name, tpt, Some(wrappedRhs))
+              val transformedRest = transformBlockStatements(rest, expr, isReturnPosition)
+              transformedRest match
+                case Block(restStats, restExpr) =>
+                  Block(transformedVal :: restStats, restExpr)
+                case _ =>
+                  Block(List(transformedVal), transformedRest)
+
+        case (defDef: DefDef) :: rest =>
+          // Def definition - don't transform, just include
+          val transformedRest = transformBlockStatements(rest, expr, isReturnPosition)
+          transformedRest match
+            case Block(restStats, restExpr) =>
+              Block(defDef :: restStats, restExpr)
+            case _ =>
+              Block(List(defDef), transformedRest)
+
+        case (imp: Import) :: rest =>
+          // Import - pass through
+          val transformedRest = transformBlockStatements(rest, expr, isReturnPosition)
+          transformedRest match
+            case Block(restStats, restExpr) =>
+              Block(imp :: restStats, restExpr)
+            case _ =>
+              Block(List(imp), transformedRest)
+
+        case (term: Term) :: rest =>
+          // Term as statement - recurse to handle blocks/if/match at top level
+          val transformedTerm = transformTopLevel(term)
+          val transformedRest = transformBlockStatements(rest, expr, isReturnPosition)
+          transformedRest match
+            case Block(restStats, restExpr) =>
+              Block(transformedTerm :: restStats, restExpr)
+            case _ =>
+              Block(List(transformedTerm), transformedRest)
+
+        case other :: _ =>
+          report.errorAndAbort(s"DurablePreprocessor: unexpected statement type: ${other.getClass.getName}", other.pos)
+
+    /**
+     * Wrap the rest of the block in WithSessionResource for an ephemeral resource val.
+     * Uses the user's expression for acquisition, takes release from DurableEphemeral.
+     *
+     * Generates:
+     *   await(Durable.withResourceSync(
+     *     acquire = userExpression,
+     *     release = r => summon[DurableEphemeral[R]].release(r)
+     *   ){ r => restOfBlock })
+     */
+    def wrapWithEphemeralResource(
+        vd: ValDef,
+        rhs: Term,
+        restStats: List[Statement],
+        expr: Term,
+        valType: TypeRepr,
+        ephemeralInstance: Term,
+        isReturnPosition: Boolean
+    ): Term =
+      val originalSymbol = vd.symbol
+
+      // Build the rest of the block as a term (will be the lambda body)
+      // We need to transform it AND substitute the original symbol with the lambda param
+      val restBlock = transformBlockStatements(restStats, expr, isReturnPosition = true)
+
+      // Get the result type from the rest of the block
+      val resultType = widenAll(restBlock.tpe)
+
+      // Create lambda for use: (r: R) => restBlock (with symbol substitution)
+      val useLambdaMethodType = MethodType(List(vd.name))(_ => List(valType), _ => resultType)
+
+      val useLambda = Lambda(
+        Symbol.spliceOwner,
+        useLambdaMethodType,
+        (meth: Symbol, params: List[Tree]) =>
+          val paramSymbol = params.head.asInstanceOf[ValDef].symbol
+          val substitutor = new SymbolSubstitutor(originalSymbol, paramSymbol)
+          substitutor.transformTerm(restBlock)(meth)
+      )
+
+      // Create lambda for release: (r: R) => ephemeral.release(r)
+      val releaseLambdaMethodType = MethodType(List("r"))(_ => List(valType), _ => TypeRepr.of[Unit])
+      val releaseLambda = Lambda(
+        Symbol.spliceOwner,
+        releaseLambdaMethodType,
+        (meth: Symbol, params: List[Tree]) =>
+          val paramRef = Ref(params.head.asInstanceOf[ValDef].symbol)
+          // Call ephemeralInstance.release(r)
+          val releaseMethod = ephemeralInstance.tpe.widen.typeSymbol.methodMember("release").head
+          Apply(Select(ephemeralInstance, releaseMethod), List(paramRef))
+      )
+
+      // Build: Durable.withResourceSync[R, A](acquire = rhs, release = releaseLambda)(useLambda)
+      // dotty-cps-async will transform to withResourceSync_async if body contains awaits
+      val durableModule = Ref(Symbol.requiredModule("durable.Durable"))
+      val withResourceMethod = durableModule.symbol.methodMember("withResourceSync").head
+
+      val withResourceCall = Apply(
+        Apply(
+          TypeApply(
+            Select(durableModule, withResourceMethod),
+            List(
+              TypeTree.of(using valType.asType),
+              TypeTree.of(using resultType.asType)
+            )
+          ),
+          List(rhs, releaseLambda)  // acquire = user's expression, release = from typeclass
+        ),
+        List(useLambda)
+      )
+
+      // Wrap with await[Durable, A, Durable](withResourceCall)(using ctx, identityConversion)
+      val awaitRef = Ref(Symbol.requiredMethod("cps.await"))
+      val awaitWithTypes = TypeApply(
+        awaitRef,
+        List(
+          TypeTree.of[Durable],
+          TypeTree.of(using resultType.asType),
+          TypeTree.of[Durable]
+        )
+      )
+      val awaitApply1 = Apply(awaitWithTypes, List(withResourceCall))
+      val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))
+      val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
+      Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
+
+    /**
      * Transform a statement at top level.
      * Only wraps val definitions - doesn't descend into expressions.
+     * Note: For blocks, use transformBlockStatements for proper resource handling.
      */
     def transformStatement(stat: Statement): Statement =
       stat match
@@ -426,12 +589,9 @@ object DurablePreprocessor:
      */
     def transformTopLevel(term: Term, isReturnPosition: Boolean = false): Term =
       term match
-        // Block - transform its statements, final expr is at return position
+        // Block - transform using transformBlockStatements for proper resource handling
         case block @ Block(stats, expr) =>
-          Block.copy(block)(
-            stats.map(transformStatement),
-            transformTopLevel(expr, isReturnPosition = true)
-          )
+          transformBlockStatements(stats, expr, isReturnPosition)
 
         // If expression - wrap condition, branches inherit return position
         case ifTerm @ If(cond, thenBranch, elseBranch) =>
