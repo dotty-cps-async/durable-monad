@@ -18,6 +18,7 @@ lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
     libraryDependencies ++= Seq(
       cpsAsyncOrg %%% "dotty-cps-async" % cpsAsyncVersion,
       "com.github.rssh" %%% "appcontext" % appContextVersion,
+      "com.github.rssh" %%% "appcontext-tf" % appContextVersion,
       "org.scalameta" %%% "munit" % "1.0.0" % Test
     )
   )

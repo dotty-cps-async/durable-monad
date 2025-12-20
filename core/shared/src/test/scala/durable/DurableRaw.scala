@@ -49,7 +49,7 @@ object DurableRaw:
 
   /**
    * CpsMonadContext for DurableRaw - provides context for async/await.
-   * Unlike Durable.DurableCpsContext, this does NOT wrap vals with activity.
+   * Unlike Durable.DurableContext, this does NOT wrap vals with activity.
    */
   class DurableRawCpsContext extends CpsTryMonadContext[[A] =>> DurableRaw[A]]:
     def monad: CpsTryMonad[[A] =>> DurableRaw[A]] = durableRawCpsTryMonad

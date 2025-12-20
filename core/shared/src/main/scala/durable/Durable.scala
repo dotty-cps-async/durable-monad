@@ -153,6 +153,65 @@ object Durable:
   def local[A](compute: RunContext => A): Durable[A] =
     LocalComputation(compute)
 
+  // === Context access methods (shorthand for summon[DurableContext].xxx) ===
+
+  /**
+   * Access the full RunContext inside async[Durable] blocks.
+   * NOT cached - fresh on each access during replay.
+   */
+  def runContext(using ctx: DurableContext): Durable[RunContext] =
+    ctx.runContext
+
+  /**
+   * Access the workflow ID inside async[Durable] blocks.
+   * NOT cached - fresh on each access during replay.
+   */
+  def workflowId(using ctx: DurableContext): Durable[WorkflowId] =
+    ctx.workflowId
+
+  /**
+   * Access the storage backend inside async[Durable] blocks.
+   * NOT cached - fresh on each access during replay.
+   */
+  def backend(using ctx: DurableContext): Durable[DurableStorageBackend] =
+    ctx.backend
+
+  /**
+   * Access the AppContext cache inside async[Durable] blocks.
+   * NOT cached - fresh on each access during replay.
+   */
+  def appContext(using ctx: DurableContext): Durable[AppContext.Cache] =
+    ctx.appContext
+
+  /**
+   * Generic context accessor inside async[Durable] blocks.
+   * NOT cached - fresh on each access during replay.
+   */
+  def context[A](f: RunContext => A)(using ctx: DurableContext): Durable[A] =
+    ctx.context(f)
+
+  // === Tagless-final support ===
+
+  /**
+   * Provides RunContext via the tagless-final pattern.
+   * Uses LocalComputation so it's NOT cached - fresh on each access.
+   *
+   * Enables context-aware services using InAppContext:
+   * {{{
+   * trait MyLogger[F[_]: InAppContext[(RunContext *: EmptyTuple)]] {
+   *   def log(msg: String): F[Unit]
+   * }
+   *
+   * // Usage in workflow:
+   * async[Durable] {
+   *   val ctx = await(AppContext.asyncGet[Durable, RunContext])
+   *   // or via InAppContext.get[Durable, RunContext]
+   * }
+   * }}}
+   */
+  given durableRunContextProvider: AppContextAsyncProvider[Durable, RunContext] with
+    def get: Durable[RunContext] = LocalComputation(ctx => ctx)
+
   /**
    * Get a resource from AppContext cache.
    *
@@ -338,8 +397,9 @@ object Durable:
   /**
    * CpsMonadContext for Durable - provides context for async/await.
    * Also provides activity methods for the preprocessor to wrap val definitions.
+   * Additionally provides context access methods for accessing RunContext at runtime.
    */
-  class DurableCpsContext extends CpsTryMonadContext[[A] =>> Durable[A]]:
+  class DurableContext extends CpsTryMonadContext[[A] =>> Durable[A]]:
     def monad: CpsTryMonad[[A] =>> Durable[A]] = durableCpsTryMonad
 
     /**
@@ -389,11 +449,48 @@ object Durable:
                         (using wrapper: DurableAsync[F], storage: DurableStorage[T, S]): Durable[F[T]] =
       Durable.AsyncActivity(() => compute, storage, policy, wrapper)
 
+    // === Context access methods (NOT cached - uses LocalComputation) ===
+
+    /**
+     * Access the full RunContext at runtime.
+     * NOT cached - fresh on each access during replay.
+     */
+    def runContext: Durable[RunContext] =
+      Durable.LocalComputation(ctx => ctx)
+
+    /**
+     * Access the workflow ID at runtime.
+     * NOT cached - fresh on each access during replay.
+     */
+    def workflowId: Durable[WorkflowId] =
+      Durable.LocalComputation(_.workflowId)
+
+    /**
+     * Access the storage backend at runtime.
+     * NOT cached - fresh on each access during replay.
+     */
+    def backend: Durable[DurableStorageBackend] =
+      Durable.LocalComputation(_.backend)
+
+    /**
+     * Access the AppContext cache at runtime.
+     * NOT cached - fresh on each access during replay.
+     */
+    def appContext: Durable[AppContext.Cache] =
+      Durable.LocalComputation(_.appContext)
+
+    /**
+     * Generic context accessor.
+     * NOT cached - fresh on each access during replay.
+     */
+    def context[A](f: RunContext => A): Durable[A] =
+      Durable.LocalComputation(f)
+
   /**
    * CpsTryMonad instance for async/await syntax.
    */
   given durableCpsTryMonad: CpsTryMonad[[A] =>> Durable[A]] with
-    type Context = DurableCpsContext
+    type Context = DurableContext
 
     def pure[A](a: A): Durable[A] = Durable.pure(a)
 
@@ -410,13 +507,13 @@ object Durable:
       FlatMapTry(fa, f)
 
     def apply[A](op: Context => Durable[A]): Durable[A] =
-      op(new DurableCpsContext)
+      op(new DurableContext)
 
   /**
    * CpsPreprocessor for Durable monad - available via companion object.
    * Automatically wraps val definitions with activity calls for replay-based execution.
    */
-  given durablePreprocessor[C <: DurableCpsContext]: CpsPreprocessor[Durable, C] with
+  given durablePreprocessor[C <: DurableContext]: CpsPreprocessor[Durable, C] with
     transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
       ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
 
@@ -437,4 +534,5 @@ object Durable:
         "F[_].await should be transformed by DurablePreprocessor. " +
         "This indicates the preprocessor failed to intercept the await call."
       )
+
 

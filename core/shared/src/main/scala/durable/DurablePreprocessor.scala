@@ -31,7 +31,7 @@ object DurablePreprocessor:
    * Main preprocessing implementation.
    * Transforms only top-level statements - does NOT descend recursively.
    */
-  def impl[A: Type, C <: Durable.DurableCpsContext: Type](
+  def impl[A: Type, C <: Durable.DurableContext: Type](
     body: Expr[A],
     ctx: Expr[C]
   )(using Quotes): Expr[A] =

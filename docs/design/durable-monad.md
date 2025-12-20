@@ -678,6 +678,139 @@ def restart(): Unit =
   engine.recover()  // Workflows resume with fresh resources
 ```
 
+### Runtime Context Access
+
+Workflows can access runtime context (workflowId, storage backend, AppContext cache) inside `async[Durable]` blocks. Context access is NOT cached - it returns fresh values on each access during replay.
+
+**Available context accessors:**
+
+```scala
+async[Durable] {
+  // Get workflow ID (for logging, correlation, child workflow naming)
+  val wfId = await(Durable.workflowId)
+
+  // Get full RunContext (workflowId, backend, appContext, config, etc.)
+  val ctx = await(Durable.runContext)
+
+  // Get storage backend directly
+  val backend = await(Durable.backend)
+
+  // Get AppContext cache
+  val appCtx = await(Durable.appContext)
+
+  // Generic accessor with lambda
+  val resumeIdx = await(Durable.context(_.resumeFromIndex))
+}
+```
+
+**Key characteristics:**
+- Context access uses `LocalComputation` internally - NOT cached, no activity index consumed
+- Returns fresh values on each access (even during replay)
+- `DurableContext` is the CPS context available inside `async[Durable]` blocks
+- Can also use `summon[Durable.DurableContext].workflowId` syntax
+
+**Use case: Logging with workflow ID:**
+
+```scala
+async[Durable] {
+  val wfId = await(Durable.workflowId)
+  println(s"[${wfId.value}] Starting workflow")
+
+  val result = processData()
+  println(s"[${wfId.value}] Completed with result: $result")
+  result
+}
+```
+
+### Tagless-Final Pattern for Context-Aware Services
+
+For building reusable services that need runtime context, durable-monad integrates with scala-appcontext's tagless-final infrastructure via `appcontext-tf`. This enables polymorphic services that work with any effect type.
+
+**Available providers:**
+
+```scala
+// RunContext is available via AppContextAsyncProvider
+given durableRunContextProvider: AppContextAsyncProvider[Durable, RunContext]
+
+// AppContextPure[Durable] is auto-derived from CpsMonad[Durable]
+```
+
+**Getting context via tagless-final:**
+
+```scala
+import com.github.rssh.appcontext.*
+
+async[Durable] {
+  // Via AppContext extension
+  val ctx = await(AppContext.asyncGet[Durable, RunContext])
+
+  // Via InAppContext (equivalent)
+  val ctx2 = await(InAppContext.get[Durable, RunContext])
+
+  println(s"Workflow: ${ctx.workflowId.value}")
+}
+```
+
+**Building context-aware services:**
+
+Services can be parameterized over effect type `F[_]` and use `InAppContext` to access dependencies:
+
+```scala
+import com.github.rssh.appcontext.*
+import cps.*
+
+// Service trait - polymorphic over effect type
+trait WorkflowLogger[F[_]]:
+  def info(msg: String): F[Unit]
+  def error(msg: String, ex: Throwable): F[Unit]
+
+object WorkflowLogger:
+  // Implementation that needs RunContext
+  def apply[F[_]: CpsMonad](using lookup: AppContextAsyncProviderLookup[F, RunContext]): WorkflowLogger[F] =
+    new WorkflowLogger[F]:
+      def info(msg: String): F[Unit] =
+        summon[CpsMonad[F]].flatMap(lookup.get) { ctx =>
+          summon[CpsMonad[F]].pure(println(s"[${ctx.workflowId.value}] INFO: $msg"))
+        }
+
+      def error(msg: String, ex: Throwable): F[Unit] =
+        summon[CpsMonad[F]].flatMap(lookup.get) { ctx =>
+          summon[CpsMonad[F]].pure(println(s"[${ctx.workflowId.value}] ERROR: $msg - ${ex.getMessage}"))
+        }
+
+  // Provider - makes WorkflowLogger available via AppContext.asyncGet
+  given [F[_]: CpsMonad](using AppContextAsyncProviderLookup[F, RunContext]): AppContextAsyncProvider[F, WorkflowLogger[F]] with
+    def get: F[WorkflowLogger[F]] = summon[CpsMonad[F]].pure(WorkflowLogger.apply[F])
+```
+
+**Using the service in a workflow:**
+
+```scala
+async[Durable] {
+  // Get the logger (instantiated with Durable effect type)
+  val logger = await(AppContext.asyncGet[Durable, WorkflowLogger[Durable]])
+
+  await(logger.info("Starting order processing"))
+
+  val result = try {
+    processOrder()
+  } catch {
+    case ex: Exception =>
+      await(logger.error("Order processing failed", ex))
+      throw ex
+  }
+
+  await(logger.info(s"Order completed: $result"))
+  result
+}
+```
+
+**Key benefits:**
+- Services are reusable across different effect types (Future, IO, Durable)
+- Context is accessed lazily when service methods are called
+- No manual context threading - `InAppContext` handles it
+- Uses `LocalComputation` internally - NOT cached, fresh on each access
+
 ### Compile-Time Check
 
 At each `val` definition, the macro generates code that requires `DurableStorage[T, S]`:
@@ -725,12 +858,12 @@ Future  ←──  DurableStorageBackend  ←──  DurableStorage[T, S]  ←�
 
 ```scala
 // Preprocessor for Durable
-given durablePreprocessor[C <: Durable.DurableCpsContext]: CpsPreprocessor[Durable, C] with
+given durablePreprocessor[C <: Durable.DurableContext]: CpsPreprocessor[Durable, C] with
   transparent inline def preprocess[A](inline body: A, inline ctx: C): A =
     ${ DurablePreprocessor.impl[A, C]('body, 'ctx) }
 
 object DurablePreprocessor {
-  def impl[A: Type, C <: Durable.DurableCpsContext: Type](
+  def impl[A: Type, C <: Durable.DurableContext: Type](
     body: Expr[A],
     ctx: Expr[C]
   )(using Quotes): Expr[A] = {
