@@ -22,7 +22,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
   test("async[Durable] - pure value") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("prep-pure-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow = async[Durable] {
       42
@@ -36,7 +36,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
   test("async[Durable] - val is automatically cached") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("prep-val-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     def makeWorkflow(counter: () => Unit) = async[Durable] {
       val x = {
@@ -60,7 +60,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("prep-replay-1")
 
     // First run - populate cache
-    val ctx1 = RunContext.fresh(workflowId)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     var executeCount = 0
 
     def makeWorkflow(counter: () => Unit) = async[Durable] {
@@ -78,7 +78,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
       // Second run - replay from cache
       executeCount = 0
-      val ctx2 = RunContext.resume(workflowId, cachedCount)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount)
       WorkflowSessionRunner.run(makeWorkflow(() => executeCount += 1), ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
         assertEquals(executeCount, 0, "Should not re-execute on replay")
@@ -89,7 +89,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
   test("async[Durable] - multiple vals in sequence") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("prep-seq-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var aCount, bCount, cCount = 0
     def incA(): Int = { aCount += 1; 10 }
@@ -124,7 +124,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
     }
 
     // First run
-    val ctx1 = RunContext.fresh(workflowId)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(makeWorkflow(getCond), ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(condCount, 1)
@@ -132,7 +132,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
       // Replay - condition should be cached
       condCount = 0
-      val ctx2 = RunContext.resume(workflowId, cachedCount)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount)
       WorkflowSessionRunner.run(makeWorkflow(getCond), ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
         assertEquals(condCount, 0, "Condition should be replayed from cache")
@@ -155,7 +155,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
     }
 
     // First run
-    val ctx1 = RunContext.fresh(workflowId)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(makeWorkflow(getScrutinee), ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, "two"))
       assertEquals(scrutineeCount, 1)
@@ -163,7 +163,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
       // Replay - scrutinee should be cached
       scrutineeCount = 0
-      val ctx2 = RunContext.resume(workflowId, cachedCount)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount)
       WorkflowSessionRunner.run(makeWorkflow(getScrutinee), ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, "two"))
         assertEquals(scrutineeCount, 0, "Scrutinee should be replayed from cache")
@@ -174,7 +174,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
   test("async[Durable] - explicit await still works") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("prep-await-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow = async[Durable] {
@@ -195,7 +195,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
   test("async[Durable] - try/catch with preprocessor") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("prep-try-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow = async[Durable] {
       try {
@@ -214,7 +214,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
   test("async[Durable] - nested blocks") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("prep-nested-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var outerCount, innerCount = 0
     def incOuter(): Int = { outerCount += 1; 10 }
@@ -240,7 +240,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
     given DurableEventName[String] = DurableEventName("prep-signal")
     val workflowId = WorkflowId("prep-suspend-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var beforeCount = 0
     def incBefore(): Int = { beforeCount += 1; 10 }
@@ -267,7 +267,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
     given DurableEventName[String] = DurableEventName("new-syntax-signal")
     val workflowId = WorkflowId("prep-event-syntax-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     // Using the new Event[E].receive.await syntax - backend type is inferred!
     val workflow = async[Durable] {
@@ -286,7 +286,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
   test("async[Durable] - complex workflow with multiple activities") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("prep-complex-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     def compute(n: Int): Int = n * 2
 

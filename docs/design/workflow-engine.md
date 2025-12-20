@@ -546,7 +546,7 @@ private def runWorkflow[A](
   workflow: Durable[A],
   resumeFrom: Int
 ): Future[Unit] =
-  val ctx = RunContext(workflowId, resumeFrom, config)
+  val ctx = WorkflowSessionRunner.RunContext(workflowId, resumeFrom, config)
   WorkflowSessionRunner.run(workflow, ctx).flatMap {
     case WorkflowResult.Completed(value) =>
       markSucceeded(workflowId, value)

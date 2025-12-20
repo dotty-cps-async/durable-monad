@@ -44,7 +44,7 @@ object DurableRaw:
     DurableRaw(Durable.activitySync(compute, policy))
 
   /** Local computation */
-  def local[A](compute: RunContext => A): DurableRaw[A] =
+  def local[A](compute: WorkflowSessionRunner.RunContext => A): DurableRaw[A] =
     Durable.local(compute)
 
   /**

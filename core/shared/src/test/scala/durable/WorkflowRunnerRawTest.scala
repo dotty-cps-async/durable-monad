@@ -22,7 +22,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - pure value") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-pure-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       42
@@ -36,7 +36,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - val without activity is not cached") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-val-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val x = 21
@@ -52,7 +52,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - explicit activity is cached") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-activity-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -76,7 +76,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
 
     // Pre-populate cache
     backing.put(workflowId, 0, Right(42))
-    val ctx = RunContext.resume(workflowId, 1)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -96,7 +96,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - multiple activities in sequence") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-seq-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -120,7 +120,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
     // Pre-populate cache with first two values
     backing.put(workflowId, 0, Right(10))
     backing.put(workflowId, 1, Right(20))
-    val ctx = RunContext.resume(workflowId, 2)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -140,7 +140,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - sync activity") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-sync-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -161,7 +161,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - if expression") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-if-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val cond = await(DurableRaw.activitySync(true))
@@ -180,7 +180,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - error handling") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-error-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val x = await(DurableRaw.activitySync(10))
@@ -198,7 +198,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - try/catch") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-try-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       try {
@@ -217,7 +217,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
   test("async[DurableRaw] - local computation") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("raw-local-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[WorkflowId] = async[DurableRaw] {
       await(DurableRaw(Durable.local(ctx => ctx.workflowId)))
@@ -232,7 +232,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
     given DurableEventName[String] = DurableEventName("test-signal")
     val workflowId = WorkflowId("raw-suspend-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[Int] = async[DurableRaw] {
       val a = await(DurableRaw.activitySync(10))

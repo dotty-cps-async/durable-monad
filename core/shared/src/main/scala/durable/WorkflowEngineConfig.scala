@@ -11,7 +11,7 @@ import com.github.rssh.appcontext.*
  *                   Create fresh on engine restart to get fresh resources.
  */
 case class WorkflowEngineConfig(
-  runConfig: RunConfig = RunConfig.default,
+  runConfig: WorkflowSessionRunner.RunConfig = WorkflowSessionRunner.RunConfig.default,
   appContext: AppContext.Cache = AppContext.newCache
 )
 

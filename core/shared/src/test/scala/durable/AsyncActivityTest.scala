@@ -22,7 +22,7 @@ class AsyncActivityTest extends FunSuite:
   test("async activity caches Future result") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("async-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var callCount = 0
     def asyncCompute(): Future[Int] = {
@@ -63,7 +63,7 @@ class AsyncActivityTest extends FunSuite:
     }
 
     // First run - computes
-    val ctx1 = RunContext.fresh(workflowId)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap {
       case WorkflowSessionResult.Completed(_, futureResult1) =>
         futureResult1.flatMap { value1 =>
@@ -72,7 +72,7 @@ class AsyncActivityTest extends FunSuite:
 
           // Second run - replay from cache
           callCount = 0
-          val ctx2 = RunContext.resume(workflowId, 1)
+          val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
           WorkflowSessionRunner.run(workflow, ctx2).flatMap {
             case WorkflowSessionResult.Completed(_, futureResult2) =>
               futureResult2.map { value2 =>
@@ -105,7 +105,7 @@ class AsyncActivityTest extends FunSuite:
 
     // First run - fails after retries and caches failure
     // Default RetryPolicy.default has maxAttempts=3
-    val ctx1 = RunContext.fresh(workflowId)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap {
       case WorkflowSessionResult.Completed(_, futureResult1) =>
         futureResult1.transformWith {
@@ -117,7 +117,7 @@ class AsyncActivityTest extends FunSuite:
 
             // Second run - replays failure from cache
             callCount = 0
-            val ctx2 = RunContext.resume(workflowId, 1)
+            val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
             WorkflowSessionRunner.run(workflow, ctx2).flatMap {
               case WorkflowSessionResult.Completed(_, futureResult2) =>
                 futureResult2.transformWith {
@@ -144,7 +144,7 @@ class AsyncActivityTest extends FunSuite:
   test("non-Future types still use activitySync") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("sync-fallback")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var callCount = 0
 
@@ -164,7 +164,7 @@ class AsyncActivityTest extends FunSuite:
   test("mixed sync and async activities") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("mixed")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var syncCount = 0
     var asyncCount = 0

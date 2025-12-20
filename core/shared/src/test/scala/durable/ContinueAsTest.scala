@@ -38,7 +38,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = CounterWorkflow(3)
-    val ctx = RunContext.fresh(WorkflowId("test-continue-as-1"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-continue-as-1"))
 
     val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
@@ -55,7 +55,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = TransitionWorkflow(5)
-    val ctx = RunContext.fresh(WorkflowId("test-transition-1"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-transition-1"))
 
     val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
@@ -72,7 +72,7 @@ class ContinueAsTest extends FunSuite:
 
     val workflow = CounterWorkflow(5)
     val workflowId = WorkflowId("test-store-args-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     for
       result <- WorkflowSessionRunner.run(workflow, ctx)
@@ -91,7 +91,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = CounterWorkflow(0)
-    val ctx = RunContext.fresh(WorkflowId("test-complete-1"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-complete-1"))
 
     val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
@@ -160,7 +160,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = CountdownWithPreprocessor(3)
-    val ctx = RunContext.fresh(WorkflowId("test-countdown-preprocessor"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-countdown-preprocessor"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -176,7 +176,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = CountdownWithPreprocessor(0)
-    val ctx = RunContext.fresh(WorkflowId("test-countdown-zero"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-countdown-zero"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -207,7 +207,7 @@ class ContinueAsTest extends FunSuite:
 
     // Start with (3, 0) - should accumulate 3 + 2 + 1 = 6
     val workflow = AccumulatorWorkflow(3, 0)
-    val ctx = RunContext.fresh(WorkflowId("test-accumulator"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-accumulator"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -242,7 +242,7 @@ class ContinueAsTest extends FunSuite:
 
     val workflow = ProcessAndContinue(2)
     val workflowId = WorkflowId("test-process-continue")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -261,7 +261,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = ProcessAndContinue(0)
-    val ctx = RunContext.fresh(WorkflowId("test-process-complete"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-process-complete"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -289,7 +289,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = ExplicitTupleWorkflow(2)
-    val ctx = RunContext.fresh(WorkflowId("test-explicit-tuple"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-explicit-tuple"))
 
     val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
 
@@ -323,7 +323,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = HandoffWorkflow(5)
-    val ctx = RunContext.fresh(WorkflowId("test-handoff"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-handoff"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -339,7 +339,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = HandoffWorkflow(0)
-    val ctx = RunContext.fresh(WorkflowId("test-no-handoff"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-no-handoff"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -374,7 +374,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = StateA(10)
-    val ctx = RunContext.fresh(WorkflowId("test-state-machine"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-state-machine"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
@@ -404,7 +404,7 @@ class ContinueAsTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = TraitMethodWorkflow(3)
-    val ctx = RunContext.fresh(WorkflowId("test-trait-method"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-trait-method"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match

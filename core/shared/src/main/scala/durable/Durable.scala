@@ -39,7 +39,7 @@ enum Durable[A]:
   case Error(error: Throwable)
 
   /** Local computation - sync, deterministic, no caching needed. Has access to context. */
-  case LocalComputation(compute: RunContext => A)
+  case LocalComputation(compute: WorkflowSessionRunner.RunContext => A)
 
   /**
    * Activity (outbound operation).
@@ -128,7 +128,7 @@ enum Durable[A]:
    * @param use Function that uses the resource and returns a Durable workflow
    */
   case WithSessionResource[R, B](
-    acquire: RunContext => R,
+    acquire: WorkflowSessionRunner.RunContext => R,
     release: R => Unit,
     use: R => Durable[B]
   ) extends Durable[B]
@@ -150,7 +150,7 @@ object Durable:
     Error(e)
 
   /** Local computation - sync, deterministic, no caching */
-  def local[A](compute: RunContext => A): Durable[A] =
+  def local[A](compute: WorkflowSessionRunner.RunContext => A): Durable[A] =
     LocalComputation(compute)
 
   // === Context access methods (shorthand for summon[DurableContext].xxx) ===
@@ -159,7 +159,7 @@ object Durable:
    * Access the full RunContext inside async[Durable] blocks.
    * NOT cached - fresh on each access during replay.
    */
-  def runContext(using ctx: DurableContext): Durable[RunContext] =
+  def runContext(using ctx: DurableContext): Durable[WorkflowSessionRunner.RunContext] =
     ctx.runContext
 
   /**
@@ -187,7 +187,7 @@ object Durable:
    * Generic context accessor inside async[Durable] blocks.
    * NOT cached - fresh on each access during replay.
    */
-  def context[A](f: RunContext => A)(using ctx: DurableContext): Durable[A] =
+  def context[A](f: WorkflowSessionRunner.RunContext => A)(using ctx: DurableContext): Durable[A] =
     ctx.context(f)
 
   // === Tagless-final support ===
@@ -198,19 +198,19 @@ object Durable:
    *
    * Enables context-aware services using InAppContext:
    * {{{
-   * trait MyLogger[F[_]: InAppContext[(RunContext *: EmptyTuple)]] {
+   * trait MyLogger[F[_]: InAppContext[(WorkflowSessionRunner.RunContext *: EmptyTuple)]] {
    *   def log(msg: String): F[Unit]
    * }
    *
    * // Usage in workflow:
    * async[Durable] {
-   *   val ctx = await(AppContext.asyncGet[Durable, RunContext])
-   *   // or via InAppContext.get[Durable, RunContext]
+   *   val ctx = await(AppContext.asyncGet[Durable, WorkflowSessionRunner.RunContext])
+   *   // or via InAppContext.get[Durable, WorkflowSessionRunner.RunContext]
    * }
    * }}}
    */
-  given durableRunContextProvider: AppContextAsyncProvider[Durable, RunContext] with
-    def get: Durable[RunContext] = LocalComputation(ctx => ctx)
+  given durableRunContextProvider: AppContextAsyncProvider[Durable, WorkflowSessionRunner.RunContext] with
+    def get: Durable[WorkflowSessionRunner.RunContext] = LocalComputation(ctx => ctx)
 
   /**
    * Get a resource from AppContext cache.
@@ -455,7 +455,7 @@ object Durable:
      * Access the full RunContext at runtime.
      * NOT cached - fresh on each access during replay.
      */
-    def runContext: Durable[RunContext] =
+    def runContext: Durable[WorkflowSessionRunner.RunContext] =
       Durable.LocalComputation(ctx => ctx)
 
     /**
@@ -483,7 +483,7 @@ object Durable:
      * Generic context accessor.
      * NOT cached - fresh on each access during replay.
      */
-    def context[A](f: RunContext => A): Durable[A] =
+    def context[A](f: WorkflowSessionRunner.RunContext => A): Durable[A] =
       Durable.LocalComputation(f)
 
   /**

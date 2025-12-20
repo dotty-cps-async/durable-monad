@@ -73,7 +73,7 @@ await(Durable.withResource(
 
 ```scala
 case WithSessionResource[R, B](
-  acquire: RunContext => R,
+  acquire: WorkflowSessionRunner.RunContext => R,
   release: R => Unit,
   use: R => Durable[B]
 ) extends Durable[B]

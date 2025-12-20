@@ -20,7 +20,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run pure value") {
     withStorage {
       val workflowId = WorkflowId("test-1")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = Durable.pure[Int](42)
       WorkflowSessionRunner.run(workflow, ctx).map { result =>
@@ -32,7 +32,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run map") {
     withStorage {
       val workflowId = WorkflowId("test-2")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = Durable.pure[Int](21).map(_ * 2)
       WorkflowSessionRunner.run(workflow, ctx).map { result =>
@@ -44,7 +44,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run flatMap") {
     withStorage {
       val workflowId = WorkflowId("test-3")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = for
         a <- Durable.pure[Int](10)
@@ -60,7 +60,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run local computation") {
     withStorage {
       val workflowId = WorkflowId("test-4")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       var computed = false
       val workflow = Durable.local[Int] { _ =>
@@ -80,7 +80,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run activity - executes and caches") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("test-5")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow = Durable.activity {
@@ -102,7 +102,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
 
     // Resume from index 1 (after index 0 is cached)
     val workflowId = WorkflowId("test-6")
-    val ctx = RunContext.resume(workflowId, 1)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
 
     var executeCount = 0
     val workflow = Durable.activity {
@@ -120,7 +120,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
     given DurableEventName[String] = DurableEventName("waiting for signal")
     val workflowId = WorkflowId("test-7")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow = for
       a <- Durable.pure[Int](10)
@@ -138,7 +138,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run error") {
     withStorage {
       val workflowId = WorkflowId("test-8")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = for
         a <- Durable.pure[Int](10)
@@ -157,7 +157,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run multiple activities in sequence") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("test-9")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var executeCount = 0
     val workflow = for
@@ -182,7 +182,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
     backing.put(workflowId, 1, Right(20))
 
     // Resume from index 2 (first two cached)
-    val ctx = RunContext.resume(workflowId, 2)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
 
     var executeCount = 0
     val workflow = for
@@ -201,7 +201,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("local computation has access to context") {
     withStorage {
       val workflowId = WorkflowId("test-11")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = Durable.local[WorkflowId] { ctx =>
         ctx.workflowId
@@ -216,7 +216,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("activity result is cached") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("test-12")
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     var callCount = 0
     val workflow = Durable.activity {

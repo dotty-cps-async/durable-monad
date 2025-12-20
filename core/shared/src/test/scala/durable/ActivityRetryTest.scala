@@ -15,7 +15,7 @@ class ActivityRetryTest extends FunSuite:
   import MemoryBackingStore.given
 
   // Use immediate scheduler for fast tests
-  val testConfig = RunConfig(scheduler = Scheduler.immediate)
+  val testConfig = WorkflowSessionRunner.RunConfig(scheduler = Scheduler.immediate)
 
   test("activity succeeds on first attempt - no retry needed") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -27,7 +27,7 @@ class ActivityRetryTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("retry-test-1")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(attemptCount, 1)
@@ -50,7 +50,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-2")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(attemptCount, 3)
@@ -70,7 +70,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-3")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 3)
@@ -107,12 +107,12 @@ class ActivityRetryTest extends FunSuite:
       policy
     )
 
-    val config = RunConfig(
+    val config = WorkflowSessionRunner.RunConfig(
       retryLogger = event => events += event,
       scheduler = Scheduler.immediate
     )
     val workflowId = WorkflowId("retry-test-4")
-    val ctx = RunContext.fresh(workflowId, config)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, config)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // Only one attempt - no retries for non-recoverable
@@ -143,7 +143,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-5")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // No retry - IllegalStateException not in recoverable list
@@ -157,7 +157,7 @@ class ActivityRetryTest extends FunSuite:
     val events = scala.collection.mutable.ListBuffer[RetryEvent]()
     val logger: RetryLogger = event => events += event
 
-    val config = RunConfig(
+    val config = WorkflowSessionRunner.RunConfig(
       retryLogger = logger,
       scheduler = Scheduler.immediate
     )
@@ -174,7 +174,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-6")
-    val ctx = RunContext.fresh(workflowId, config)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, config)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(events.size, 1)
@@ -201,7 +201,7 @@ class ActivityRetryTest extends FunSuite:
 
     // Resume from index 1 (activity at index 0 is cached)
     val workflowId = WorkflowId("retry-test-7")
-    val ctx = RunContext.resume(workflowId, 1, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) => assertEquals(value, 42)
@@ -223,7 +223,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-8")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // Only one attempt with noRetry

@@ -16,7 +16,7 @@ class FailureReplayTest extends FunSuite:
   import MemoryBackingStore.given
 
   // Use immediate scheduler for fast tests
-  val testConfig = RunConfig(scheduler = Scheduler.immediate)
+  val testConfig = WorkflowSessionRunner.RunConfig(scheduler = Scheduler.immediate)
 
   test("failure is stored in cache") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -26,7 +26,7 @@ class FailureReplayTest extends FunSuite:
       RetryPolicy.noRetry
     )
 
-    val ctx = RunContext.fresh(WorkflowId("failure-store-1"), testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("failure-store-1"), testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       // Workflow should fail
       result match
@@ -60,7 +60,7 @@ class FailureReplayTest extends FunSuite:
     )
 
     // Replay from index 1 (activity at index 0 should be replayed from cache)
-    val ctx = RunContext.resume(WorkflowId("failure-replay-1"), 1, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.resume(WorkflowId("failure-replay-1"), 1, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowSessionResult.Failed(_, e) =>
@@ -121,7 +121,7 @@ class FailureReplayTest extends FunSuite:
     })
 
     // Replay from index 1
-    val ctx = RunContext.resume(WorkflowId("failure-catch-1"), 1, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.resume(WorkflowId("failure-catch-1"), 1, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, -1))
     }
@@ -160,14 +160,14 @@ class FailureReplayTest extends FunSuite:
 
     // First run - will fail and store failure, catch handles original exception
     val workflowId = WorkflowId("catch-test")
-    val ctx1 = RunContext.fresh(workflowId, testConfig)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, -1))  // Caught original
 
       shouldFail = false  // Won't matter - we're replaying from cache
 
       // Replay - should catch ReplayedException (transformed catch pattern matches it)
-      val ctx2 = RunContext.resume(workflowId, 1, testConfig)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, testConfig)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, -1))  // Caught replayed
       }
@@ -201,7 +201,7 @@ class FailureReplayTest extends FunSuite:
 
     // First run - will fail and catch original exception
     val workflowId = WorkflowId("handler-test")
-    val ctx1 = RunContext.fresh(workflowId, testConfig)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 14))  // "original error".length = 14
       assertEquals(capturedMessage, "original error")
@@ -210,7 +210,7 @@ class FailureReplayTest extends FunSuite:
       shouldFail = false  // Won't matter - replaying
 
       // Replay - e is ReplayedException but handler activity is cached
-      val ctx2 = RunContext.resume(workflowId, 2, testConfig)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2, testConfig)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 14))  // Same result - cached!
         // Note: capturedMessage might be different on replay since e.getMessage
@@ -234,7 +234,7 @@ class FailureReplayTest extends FunSuite:
     yield a + b
 
     // Replay from index 2 (both should be replayed)
-    val ctx = RunContext.resume(WorkflowId("seq-1"), 2, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.resume(WorkflowId("seq-1"), 2, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       // Second activity's failure should propagate
       result match

@@ -64,7 +64,7 @@ class MonadConversionTest extends FunSuite:
       x + 1
     }
 
-    val ctx = RunContext.fresh(workflowId)(using freshBackend)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)(using freshBackend)
     val result = Await.result(
       WorkflowSessionRunner.run(durable, ctx),
       5.seconds
@@ -115,7 +115,7 @@ class MonadConversionTest extends FunSuite:
     assertEquals(creationBeforeRun, 0, "Future NOT created when building tree (lazy)")
 
     // Resume from index 1 (after the cached activity)
-    val ctx = RunContext.resume(workflowId, 1)(using freshBackend)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1)(using freshBackend)
     val result = Await.result(
       WorkflowSessionRunner.run(durable, ctx),
       5.seconds

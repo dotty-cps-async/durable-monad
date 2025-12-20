@@ -560,12 +560,11 @@ The interpreter tracks activity index and handles replay.
 Each Activity carries its own `DurableStorage[A, S]`:
 
 ```scala
-case class RunContext(
-  workflowId: WorkflowId,
-  resumeFromIndex: Int
-)
-
 object WorkflowSessionRunner {
+  case class RunContext(
+    workflowId: WorkflowId,
+    resumeFromIndex: Int
+  )
   private class InterpreterState(val resumeFromIndex: Int) {
     private var _currentIndex: Int = 0
 
@@ -642,11 +641,11 @@ val workflow = Durable.activity(httpCall(), RetryPolicy.noRetry)
 
 **Logging:**
 ```scala
-val config = RunConfig(
+val config = WorkflowSessionRunner.RunConfig(
   retryLogger = event => println(s"Retry ${event.attempt}/${event.maxAttempts}: ${event.error}"),
   scheduler = Scheduler.default
 )
-val ctx = RunContext.fresh(WorkflowId("order-123"), config)
+val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("order-123"), config)
 ```
 
 **Key design decisions:**
@@ -696,7 +695,7 @@ async[Durable] {
 ```
 
 **Key design principles:**
-- `RunContext` contains `AppContext.Cache` for environment resources
+- `WorkflowSessionRunner.RunContext` contains `AppContext.Cache` for environment resources
 - `Durable.env[R]` gets resource from AppContext (cached globally, no release)
 - `Durable.withResource` provides bracket semantics (acquire/use/release)
 - Resource acquisition is NOT journaled - on resume, resources are acquired fresh
@@ -707,7 +706,7 @@ async[Durable] {
 ```scala
 // Engine shares AppContext across all workflows
 val config = WorkflowEngineConfig(
-  runConfig = RunConfig.default,
+  runConfig = WorkflowSessionRunner.RunConfig.default,
   appContext = AppContext.newCache  // Fresh on engine restart
 )
 val engine = WorkflowEngine(storage, config)
@@ -730,7 +729,7 @@ async[Durable] {
   // Get workflow ID (for logging, correlation, child workflow naming)
   val wfId = await(Durable.workflowId)
 
-  // Get full RunContext (workflowId, backend, appContext, config, etc.)
+  // Get full WorkflowSessionRunner.RunContext (workflowId, backend, appContext, config, etc.)
   val ctx = await(Durable.runContext)
 
   // Get storage backend directly
@@ -770,8 +769,8 @@ For building reusable services that need runtime context, durable-monad integrat
 **Available providers:**
 
 ```scala
-// RunContext is available via AppContextAsyncProvider
-given durableRunContextProvider: AppContextAsyncProvider[Durable, RunContext]
+// WorkflowSessionRunner.RunContext is available via AppContextAsyncProvider
+given durableRunContextProvider: AppContextAsyncProvider[Durable, WorkflowSessionRunner.RunContext]
 
 // AppContextPure[Durable] is auto-derived from CpsMonad[Durable]
 ```
@@ -783,10 +782,10 @@ import com.github.rssh.appcontext.*
 
 async[Durable] {
   // Via AppContext extension
-  val ctx = await(AppContext.asyncGet[Durable, RunContext])
+  val ctx = await(AppContext.asyncGet[Durable, WorkflowSessionRunner.RunContext])
 
   // Via InAppContext (equivalent)
-  val ctx2 = await(InAppContext.get[Durable, RunContext])
+  val ctx2 = await(InAppContext.get[Durable, WorkflowSessionRunner.RunContext])
 
   println(s"Workflow: ${ctx.workflowId.value}")
 }
@@ -806,8 +805,8 @@ trait WorkflowLogger[F[_]]:
   def error(msg: String, ex: Throwable): F[Unit]
 
 object WorkflowLogger:
-  // Implementation that needs RunContext
-  def apply[F[_]: CpsMonad](using lookup: AppContextAsyncProviderLookup[F, RunContext]): WorkflowLogger[F] =
+  // Implementation that needs WorkflowSessionRunner.RunContext
+  def apply[F[_]: CpsMonad](using lookup: AppContextAsyncProviderLookup[F, WorkflowSessionRunner.RunContext]): WorkflowLogger[F] =
     new WorkflowLogger[F]:
       def info(msg: String): F[Unit] =
         summon[CpsMonad[F]].flatMap(lookup.get) { ctx =>
@@ -820,7 +819,7 @@ object WorkflowLogger:
         }
 
   // Provider - makes WorkflowLogger available via AppContext.asyncGet
-  given [F[_]: CpsMonad](using AppContextAsyncProviderLookup[F, RunContext]): AppContextAsyncProvider[F, WorkflowLogger[F]] with
+  given [F[_]: CpsMonad](using AppContextAsyncProviderLookup[F, WorkflowSessionRunner.RunContext]): AppContextAsyncProvider[F, WorkflowLogger[F]] with
     def get: F[WorkflowLogger[F]] = summon[CpsMonad[F]].pure(WorkflowLogger.apply[F])
 ```
 

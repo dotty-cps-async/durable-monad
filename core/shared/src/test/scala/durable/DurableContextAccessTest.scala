@@ -22,7 +22,7 @@ class DurableContextAccessTest extends FunSuite:
       wfId.value
     }
 
-    val ctx = RunContext.fresh(expectedId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -45,7 +45,7 @@ class DurableContextAccessTest extends FunSuite:
       s"${ctx.workflowId.value}-${ctx.resumeFromIndex}"
     }
 
-    val ctx = RunContext.fresh(expectedId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -69,7 +69,7 @@ class DurableContextAccessTest extends FunSuite:
       backend.isInstanceOf[MemoryBackingStore]
     }
 
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -93,7 +93,7 @@ class DurableContextAccessTest extends FunSuite:
       appCtx.isInstanceOf[AppContext.Cache]
     }
 
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -116,7 +116,7 @@ class DurableContextAccessTest extends FunSuite:
       resumeIdx
     }
 
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -147,7 +147,7 @@ class DurableContextAccessTest extends FunSuite:
       computation
     }
 
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -172,7 +172,7 @@ class DurableContextAccessTest extends FunSuite:
     }
 
     // First run
-    val ctx1 = RunContext.fresh(workflowId)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result1 = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx1))
     }
@@ -184,7 +184,7 @@ class DurableContextAccessTest extends FunSuite:
           assertEquals(value1, "context-test-7-computed")
 
           // Second run with resume (simulating replay behavior)
-          val ctx2 = RunContext.resume(workflowId, 1)
+          val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
           val result2 = await(WorkflowSessionRunner.run(workflow, ctx2))
 
           result2 match
@@ -213,7 +213,7 @@ class DurableContextAccessTest extends FunSuite:
       allMatch
     }
 
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -237,7 +237,7 @@ class DurableContextAccessTest extends FunSuite:
       wfId.value
     }
 
-    val ctx = RunContext.fresh(expectedId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -252,16 +252,16 @@ class DurableContextAccessTest extends FunSuite:
     }
   }
 
-  test("AppContext.asyncGet[Durable, RunContext] provides context via tagless-final") {
+  test("AppContext.asyncGet[Durable, WorkflowSessionRunner.RunContext] provides context via tagless-final") {
     val expectedId = WorkflowId("context-test-10")
 
     val workflow = async[Durable] {
-      // Use tagless-final pattern to get RunContext
-      val ctx = await(AppContext.asyncGet[Durable, RunContext])
+      // Use tagless-final pattern to get WorkflowSessionRunner.RunContext
+      val ctx = await(AppContext.asyncGet[Durable, WorkflowSessionRunner.RunContext])
       ctx.workflowId.value
     }
 
-    val ctx = RunContext.fresh(expectedId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }
@@ -276,16 +276,16 @@ class DurableContextAccessTest extends FunSuite:
     }
   }
 
-  test("InAppContext.get[Durable, RunContext] also works") {
+  test("InAppContext.get[Durable, WorkflowSessionRunner.RunContext] also works") {
     val expectedId = WorkflowId("context-test-11")
 
     val workflow = async[Durable] {
       // Alternative syntax via InAppContext
-      val ctx = await(InAppContext.get[Durable, RunContext])
+      val ctx = await(InAppContext.get[Durable, WorkflowSessionRunner.RunContext])
       s"${ctx.workflowId.value}-${ctx.resumeFromIndex}"
     }
 
-    val ctx = RunContext.fresh(expectedId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
       await(WorkflowSessionRunner.run(workflow, ctx))
     }

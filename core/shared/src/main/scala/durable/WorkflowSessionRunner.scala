@@ -450,66 +450,64 @@ object WorkflowSessionRunner:
     else
       scheduler.schedule(delay)(f)
 
+  /**
+   * Execution context for the workflow runner.
+   *
+   * @param workflowId Unique identifier for this workflow instance
+   * @param backend Storage backend instance (passed to storage typeclass methods)
+   * @param appContext Application context cache for environment resources (fresh on each start/resume)
+   * @param resumeFromIndex Activity index to resume from (0 = fresh start, indices < this are replayed)
+   * @param activityOffset Starting index for activity assignment (to skip stored args when run via engine)
+   * @param config Runner configuration (logging, scheduling)
+   */
+  case class RunContext(
+    workflowId: WorkflowId,
+    backend: DurableStorageBackend,
+    appContext: AppContext.Cache,
+    resumeFromIndex: Int,
+    activityOffset: Int = 0,
+    config: RunConfig = RunConfig.default
+  )
 
-/**
- * Configuration for workflow runner.
- *
- * @param retryLogger Logger callback for retry events
- * @param scheduler Scheduler for retry delays
- */
-case class RunConfig(
-  retryLogger: RetryLogger = RetryLogger.noop,
-  scheduler: Scheduler = Scheduler.default
-)
+  object RunContext:
+    /** Create a fresh context for new workflow execution */
+    def fresh(workflowId: WorkflowId)(using backend: DurableStorageBackend): RunContext =
+      RunContext(workflowId, backend, AppContext.newCache, resumeFromIndex = 0)
 
-object RunConfig:
-  /** Default configuration */
-  val default: RunConfig = RunConfig()
+    /** Create a fresh context with custom configuration */
+    def fresh(workflowId: WorkflowId, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
+      RunContext(workflowId, backend, appContext, resumeFromIndex = 0, config = config)
 
+    /** Create a context for resuming from a specific index */
+    def resume(workflowId: WorkflowId, resumeFromIndex: Int)(using backend: DurableStorageBackend): RunContext =
+      RunContext(workflowId, backend, AppContext.newCache, resumeFromIndex)
 
-/**
- * Execution context for the workflow runner.
- *
- * @param workflowId Unique identifier for this workflow instance
- * @param backend Storage backend instance (passed to storage typeclass methods)
- * @param appContext Application context cache for environment resources (fresh on each start/resume)
- * @param resumeFromIndex Activity index to resume from (0 = fresh start, indices < this are replayed)
- * @param activityOffset Starting index for activity assignment (to skip stored args when run via engine)
- * @param config Runner configuration (logging, scheduling)
- */
-case class RunContext(
-  workflowId: WorkflowId,
-  backend: DurableStorageBackend,
-  appContext: AppContext.Cache,
-  resumeFromIndex: Int,
-  activityOffset: Int = 0,
-  config: RunConfig = RunConfig.default
-)
+    /** Create a context for resuming with custom configuration */
+    def resume(workflowId: WorkflowId, resumeFromIndex: Int, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
+      RunContext(workflowId, backend, appContext, resumeFromIndex, config = config)
 
-object RunContext:
-  /** Create a fresh context for new workflow execution */
-  def fresh(workflowId: WorkflowId)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, AppContext.newCache, resumeFromIndex = 0)
+    /** Create a context for resuming from snapshot */
+    def fromSnapshot(snapshot: DurableSnapshot)(using backend: DurableStorageBackend): RunContext =
+      RunContext(snapshot.workflowId, backend, AppContext.newCache, snapshot.activityIndex)
 
-  /** Create a fresh context with custom configuration */
-  def fresh(workflowId: WorkflowId, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, appContext, resumeFromIndex = 0, config = config)
+    /** Create a context for resuming from snapshot with custom configuration */
+    def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
+      RunContext(snapshot.workflowId, backend, appContext, snapshot.activityIndex, config = config)
 
-  /** Create a context for resuming from a specific index */
-  def resume(workflowId: WorkflowId, resumeFromIndex: Int)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, AppContext.newCache, resumeFromIndex)
+  /**
+   * Configuration for workflow runner.
+   *
+   * @param retryLogger Logger callback for retry events
+   * @param scheduler Scheduler for retry delays
+   */
+  case class RunConfig(
+    retryLogger: RetryLogger = RetryLogger.noop,
+    scheduler: Scheduler = Scheduler.default
+  )
 
-  /** Create a context for resuming with custom configuration */
-  def resume(workflowId: WorkflowId, resumeFromIndex: Int, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
-    RunContext(workflowId, backend, appContext, resumeFromIndex, config = config)
-
-  /** Create a context for resuming from snapshot */
-  def fromSnapshot(snapshot: DurableSnapshot)(using backend: DurableStorageBackend): RunContext =
-    RunContext(snapshot.workflowId, backend, AppContext.newCache, snapshot.activityIndex)
-
-  /** Create a context for resuming from snapshot with custom configuration */
-  def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig, appContext: AppContext.Cache = AppContext.newCache)(using backend: DurableStorageBackend): RunContext =
-    RunContext(snapshot.workflowId, backend, appContext, snapshot.activityIndex, config = config)
+  object RunConfig:
+    /** Default configuration */
+    val default: RunConfig = RunConfig()
 
 
 /**

@@ -8,7 +8,7 @@ import cps.*
 import durable.Durable
 import durable.MemoryBackingStore
 import durable.WorkflowSessionRunner
-import durable.RunContext
+import durable.WorkflowSessionRunner.RunContext
 import durable.WorkflowId
 import durable.WorkflowSessionResult
 
@@ -23,7 +23,7 @@ class MinimalImportTest extends FunSuite:
 
   test("preprocessor works with import durable.Durable (not durable.*)") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("minimal-import-test"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("minimal-import-test"))
 
     var computeCount = 0
     val workflow = async[Durable] {

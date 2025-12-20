@@ -18,7 +18,7 @@ class PreprocessorExternalPackageTest extends FunSuite:
 
   test("preprocessor works from external package with import durable.*") {
     given backing: MemoryBackingStore = MemoryBackingStore()
-    val ctx = RunContext.fresh(WorkflowId("external-package-test"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("external-package-test"))
 
     var computeCount = 0
     val workflow = async[Durable] {
@@ -37,7 +37,7 @@ class PreprocessorExternalPackageTest extends FunSuite:
       // Second run - should replay from cache (preprocessor wrapped val as activity)
       // Resume from index 1 (after the first activity)
       computeCount = 0
-      val ctx2 = RunContext.resume(WorkflowId("external-package-test"), 1)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("external-package-test"), 1)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(ctx.workflowId, 43))
         assertEquals(computeCount, 0, "Should not recompute on replay - preprocessor should have wrapped val as activity")
@@ -57,7 +57,7 @@ class PreprocessorExternalPackageTest extends FunSuite:
       }
 
     val workflow = ExternalCountdown(3)
-    val ctx = RunContext.fresh(WorkflowId("external-countdown"))
+    val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("external-countdown"))
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match

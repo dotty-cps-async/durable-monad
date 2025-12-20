@@ -17,7 +17,7 @@ class TryCatchTest extends FunSuite:
   import MemoryBackingStore.given
 
   // Use immediate scheduler for fast tests
-  val testConfig = RunConfig(scheduler = Scheduler.immediate)
+  val testConfig = WorkflowSessionRunner.RunConfig(scheduler = Scheduler.immediate)
 
   test("try/catch catches error from activity") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -31,7 +31,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-1")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
     }
@@ -49,7 +49,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-2")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, -1))
     }
@@ -67,7 +67,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-3")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 100))
     }
@@ -86,7 +86,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-4")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowSessionResult.Failed(_, e) =>
@@ -113,7 +113,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-5")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 10))  // Inner catch handles it
     }
@@ -136,7 +136,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-6")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 20))  // Outer catch handles it
     }
@@ -155,7 +155,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-7")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowSessionResult.Failed(_, e) =>
@@ -183,13 +183,13 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-8")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).flatMap { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 11))
       assertEquals(callCount, 1)
 
       // Replay should use cached value - resumeFromIndex=1 means index 0 is replayed from cache
-      val ctx2 = RunContext.resume(WorkflowId("try-catch-8"), 1, testConfig)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("try-catch-8"), 1, testConfig)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(ctx.workflowId, 11))
         assertEquals(callCount, 1)  // Not called again
@@ -209,7 +209,7 @@ class TryCatchTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("try-catch-9")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 99))
     }
@@ -227,7 +227,7 @@ class TryCatchTest extends FunSuite:
     val workflow = Durable.FlatMapTry(inner, handler)
 
     val workflowId = WorkflowId("try-catch-10")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
     }
@@ -245,7 +245,7 @@ class TryCatchTest extends FunSuite:
     val workflow = Durable.FlatMapTry(inner, handler)
 
     val workflowId = WorkflowId("try-catch-11")
-    val ctx = RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, -1))
     }

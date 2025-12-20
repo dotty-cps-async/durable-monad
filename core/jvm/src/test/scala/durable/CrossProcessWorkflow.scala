@@ -58,7 +58,7 @@ object ProcessA:
 
     // Create and run workflow
     val workflow = CrossProcessWorkflow.apply(input)
-    val ctx = RunContext.fresh(workflowId)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val result = Await.result(WorkflowSessionRunner.run(workflow, ctx), 30.seconds)
 
@@ -150,7 +150,7 @@ object ProcessB:
     )
 
     // Resume from saved index + 1 (past the suspend point)
-    val ctx = RunContext.resume(workflowId, metadata.activityIndex + 1)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, metadata.activityIndex + 1)
 
     println(s"[ProcessB] Resuming workflow from index ${metadata.activityIndex + 1}")
 

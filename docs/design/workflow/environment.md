@@ -35,7 +35,7 @@ async[Durable] {
 │         │                                │
 │         ▼                                │
 │  ┌─────────────┐                        │
-│  │ RunContext  │                        │
+│  │ WorkflowSessionRunner.RunContext  │                        │
 │  │ + appContext│                        │
 │  └──────┬──────┘                        │
 │         │                                │
@@ -50,7 +50,7 @@ async[Durable] {
 ```scala
 // Engine configuration includes AppContext
 case class WorkflowEngineConfig(
-  runConfig: RunConfig = RunConfig.default,
+  runConfig: WorkflowSessionRunner.RunConfig = WorkflowSessionRunner.RunConfig.default,
   appContext: AppContext.Cache = AppContext.newCache
 )
 
