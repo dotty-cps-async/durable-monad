@@ -6,9 +6,6 @@ import scala.concurrent.{Future, ExecutionContext}
  * Pure typeclass providing DurableStorage for each element of a tuple.
  * Enables storing tuple arguments with a single method call.
  *
- * This is a stateless typeclass - storage backend is passed as parameter.
- * Instances can be summoned without a backend instance.
- *
  * Type parameters:
  *   T - the tuple type
  *   S - the backing store type (extends DurableStorageBackend)
