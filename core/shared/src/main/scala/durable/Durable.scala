@@ -194,6 +194,17 @@ object Durable:
   def context[A](f: WorkflowSessionRunner.RunContext => A)(using ctx: DurableContext): Durable[A] =
     ctx.context(f)
 
+  /**
+   * Get a value from AppContext via AppContextAsyncProvider.
+   * NOT cached - provider is invoked fresh on each access.
+   *
+   * Example:
+   * {{{
+   * val emailService = Durable.appContext[EmailService].await
+   * }}}
+   */
+  def appContext[T](using p: AppContextAsyncProvider[Durable, T]): Durable[T] = p.get
+
   // === Tagless-final support ===
 
   /**

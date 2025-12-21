@@ -28,9 +28,9 @@ object CustomerOnboardingWorkflow extends DurableFunction1[CustomerId, Onboardin
 
   def apply(customerId: CustomerId)(using MemoryBackingStore): Durable[OnboardingResult] =
     async[Durable] {
-      // Get services via AppContext.asyncGet - uses cache from RunContext
-      val emailService = AppContext.asyncGet[Durable, EmailService].await
-      val activityService = AppContext.asyncGet[Durable, UserActivityService].await
+      // Get services via Durable.appContext - uses cache from RunContext
+      val emailService = Durable.appContext[EmailService].await
+      val activityService = Durable.appContext[UserActivityService].await
 
       // Step 1: Send welcome email
       emailService.sendWelcomeEmail(customerId).await
