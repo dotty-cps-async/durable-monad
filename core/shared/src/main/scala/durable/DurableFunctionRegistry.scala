@@ -2,9 +2,7 @@ package durable
 
 /**
  * Record stored in the registry for each DurableFunction.
- * Contains function and storage typeclass instances for recreation.
- *
- * The storage typeclasses are pure (stateless) - they can be used with any backend instance.
+ * Contains function and storage typeclass instances for recreation from the arguments.
  */
 case class FunctionRecord(
   function: DurableFunction[?, ?, ?],
