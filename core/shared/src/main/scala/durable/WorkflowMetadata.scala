@@ -102,18 +102,6 @@ case class PendingEvent[E](
 )
 
 /**
- * Exception thrown when sendEventTo targets a workflow that doesn't exist.
- */
-case class WorkflowNotFoundException(workflowId: WorkflowId)
-  extends Exception(s"Workflow not found: ${workflowId.value}")
-
-/**
- * Exception thrown when sendEventTo targets a workflow in terminal state.
- */
-case class WorkflowTerminatedException(workflowId: WorkflowId, status: WorkflowStatus)
-  extends Exception(s"Workflow ${workflowId.value} is terminated with status: $status")
-
-/**
  * Dead letter event - a targeted event that was not delivered because
  * the target workflow terminated without reading it.
  *

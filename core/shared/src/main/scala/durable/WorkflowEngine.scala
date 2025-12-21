@@ -100,3 +100,17 @@ object WorkflowEngine extends WorkflowEnginePlatform:
   /** Create engine with custom configuration */
   def apply[S <: DurableStorageBackend](storage: S, config: WorkflowEngineConfig)(using ExecutionContext, DurableStorage[TimeReached, S]): WorkflowEngine[S] =
     create(storage, config)
+
+/**
+ * Exception thrown when sendEventTo targets a workflow that doesn't exist.
+ */
+case class WorkflowNotFoundException(workflowId: WorkflowId)
+  extends Exception(s"Workflow not found: ${workflowId.value}")
+  with NonRecoverableException
+
+/**
+ * Exception thrown when sendEventTo targets a workflow in terminal state.
+ */
+case class WorkflowTerminatedException(workflowId: WorkflowId, status: WorkflowStatus)
+  extends Exception(s"Workflow ${workflowId.value} is terminated with status: $status")
+  with NonRecoverableException
