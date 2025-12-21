@@ -107,7 +107,7 @@ class MaxRetriesExceededException(
 ) extends Exception(
   s"Max retries ($attempts/$maxAttempts) exceeded for activity $activityIndex in workflow ${workflowId.value}",
   cause
-)
+) with NonRecoverableException
 
 /** Logger callback for retry events */
 type RetryLogger = RetryEvent => Unit
