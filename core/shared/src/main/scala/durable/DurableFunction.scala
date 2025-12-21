@@ -177,6 +177,18 @@ trait DurableFunction3[T1, T2, T3, R, S <: DurableStorageBackend](using
     val (arg1, arg2, arg3) = args
     apply(arg1, arg2, arg3)
 
+/** Trait for 4-argument durable functions */
+trait DurableFunction4[T1, T2, T3, T4, R, S <: DurableStorageBackend](using
+  argsStorage: TupleDurableStorage[(T1, T2, T3, T4), S],
+  resultStorage: DurableStorage[R, S]
+) extends DurableFunction[(T1, T2, T3, T4), R, S]:
+  /** Apply the function with four arguments */
+  def apply(arg1: T1, arg2: T2, arg3: T3, arg4: T4)(using storageBackend: S): Durable[R]
+
+  override final def applyTupled(args: (T1, T2, T3, T4))(using storageBackend: S): Durable[R] =
+    val (arg1, arg2, arg3, arg4) = args
+    apply(arg1, arg2, arg3, arg4)
+
 /**
  * Companion object for DurableFunction providing registration and extension methods.
  */
@@ -238,3 +250,12 @@ object DurableFunction:
     /** Continue as this workflow with three arguments. */
     def continueAs(arg1: T1, arg2: T2, arg3: T3)(using storageBackend: S): Durable[R] =
       Durable.continueAs(f)((arg1, arg2, arg3))
+
+  extension [T1, T2, T3, T4, R, S <: DurableStorageBackend](f: DurableFunction4[T1, T2, T3, T4, R, S])
+    /** Continue with four arguments (no tuple wrapping needed). */
+    def continueWith(arg1: T1, arg2: T2, arg3: T3, arg4: T4)(using storageBackend: S): Durable[R] =
+      f.continueWith((arg1, arg2, arg3, arg4))
+
+    /** Continue as this workflow with four arguments. */
+    def continueAs(arg1: T1, arg2: T2, arg3: T3, arg4: T4)(using storageBackend: S): Durable[R] =
+      Durable.continueAs(f)((arg1, arg2, arg3, arg4))
