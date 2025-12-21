@@ -1,4 +1,4 @@
-package durable
+package durable.runtime
 
 import scala.collection.concurrent.TrieMap
 

@@ -9,6 +9,7 @@ import scala.concurrent.duration.*
 import java.nio.file.{Files, Path, Paths}
 
 import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+import durable.runtime.DurableFunctionRegistry
 
 /**
  * Test workflow for cross-process persistence testing.

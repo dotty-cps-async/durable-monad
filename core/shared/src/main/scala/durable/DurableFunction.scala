@@ -2,6 +2,8 @@ package durable
 
 import scala.concurrent.{Future, ExecutionContext}
 
+import durable.runtime.{DurableFunctionRegistry, FunctionRecord}
+
 /**
  * Opaque type for registered function names.
  * Can only be created via DurableFunction.register, ensuring all functions are registered.

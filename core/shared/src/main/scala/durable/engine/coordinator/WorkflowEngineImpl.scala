@@ -6,7 +6,7 @@ import java.time.{Instant, Duration}
 
 import durable.*
 import durable.engine.{WorkflowStateCoordinator, TestHooks, TimerHandle, CoordinatorOp, SuspendResult, SendResult, WorkflowSessionRunner, WorkflowSessionResult, WorkflowMetadata, WorkflowRecord}
-import durable.runtime.Scheduler
+import durable.runtime.{Scheduler, DurableFunctionRegistry}
 import com.github.rssh.appcontext.*
 
 /**

@@ -1,4 +1,4 @@
-package durable
+package durable.runtime
 
 import java.util.concurrent.ConcurrentHashMap
 import scala.jdk.CollectionConverters.*

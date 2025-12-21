@@ -1,4 +1,6 @@
-package durable
+package durable.runtime
+
+import durable.{DurableFunction, DurableStorageBackend, DurableStorage, TupleDurableStorage}
 
 /**
  * Record stored in the registry for each DurableFunction.
