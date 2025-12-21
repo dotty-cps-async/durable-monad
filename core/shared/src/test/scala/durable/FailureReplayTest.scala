@@ -5,7 +5,7 @@ import scala.util.{Try, Success, Failure}
 import munit.FunSuite
 import cps.*
 
-import durable.engine.ConfigSource
+import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowSessionResult}
 import durable.runtime.Scheduler
 
 /**

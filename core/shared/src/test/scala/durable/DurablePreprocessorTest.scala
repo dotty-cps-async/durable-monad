@@ -4,6 +4,8 @@ import scala.concurrent.{Future, ExecutionContext}
 import munit.FunSuite
 import cps.*
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Tests for DurablePreprocessor - verifies that async blocks
  * are correctly transformed to wrap vals with activities.

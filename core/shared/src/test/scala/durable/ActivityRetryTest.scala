@@ -4,7 +4,7 @@ import scala.concurrent.{Future, ExecutionContext}
 import scala.concurrent.duration.*
 import munit.FunSuite
 
-import durable.engine.ConfigSource
+import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowSessionResult}
 import durable.runtime.Scheduler
 
 /**

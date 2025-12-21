@@ -6,6 +6,7 @@ import cps.*
 
 // Import durable.* should bring in the preprocessor given
 import durable.*
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
 
 /**
  * Test that verifies the preprocessor works from an external package

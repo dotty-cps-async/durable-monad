@@ -7,10 +7,10 @@ import cps.*
 // Minimal imports - only what's needed
 import durable.Durable
 import durable.MemoryBackingStore
-import durable.WorkflowSessionRunner
-import durable.WorkflowSessionRunner.RunContext
 import durable.WorkflowId
-import durable.WorkflowSessionResult
+import durable.engine.WorkflowSessionRunner
+import durable.engine.WorkflowSessionRunner.RunContext
+import durable.engine.WorkflowSessionResult
 
 /**
  * Test that verifies the preprocessor works with minimal imports.

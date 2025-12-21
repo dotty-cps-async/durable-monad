@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets
 import java.time.Instant
 import scala.concurrent.Future
 
+import durable.engine.{WorkflowMetadata, WorkflowRecord, PendingEvent}
+
 /**
  * JSON-based file storage for testing persistence across process restarts.
  *

@@ -4,6 +4,8 @@ import scala.concurrent.Future
 import scala.util.Try
 import cps.*
 
+import durable.engine.WorkflowSessionRunner
+
 /**
  * DurableRaw - a variant of Durable without the CpsPreprocessor.
  *

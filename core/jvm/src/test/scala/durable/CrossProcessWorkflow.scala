@@ -8,6 +8,8 @@ import scala.concurrent.{Future, Await, ExecutionContext}
 import scala.concurrent.duration.*
 import java.nio.file.{Files, Path, Paths}
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Test workflow for cross-process persistence testing.
  * Does an activity, then suspends waiting for an event.

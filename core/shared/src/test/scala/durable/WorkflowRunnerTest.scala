@@ -3,6 +3,8 @@ package durable
 import scala.concurrent.{Future, ExecutionContext}
 import munit.FunSuite
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Tests for WorkflowSessionRunner - the interpreter for Durable Free Monad.
  * Uses async tests (returning Future) for cross-platform compatibility.

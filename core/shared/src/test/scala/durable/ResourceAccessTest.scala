@@ -7,6 +7,7 @@ import cps.*
 import cps.monads.FutureAsyncMonad
 
 import com.github.rssh.appcontext.*
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
 
 class ResourceAccessTest extends FunSuite:
 

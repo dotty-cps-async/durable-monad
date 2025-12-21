@@ -5,6 +5,8 @@ import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
 import cps.*
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Test for CpsMonadConversion[Future, Durable] with transparent inline apply.
  * Verifies that .await on Future works inside async[Durable].

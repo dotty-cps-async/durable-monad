@@ -4,6 +4,8 @@ import scala.concurrent.{Future, ExecutionContext}
 import munit.FunSuite
 import cps.*
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Tests for DurableRaw - verifying raw API behavior without preprocessor.
  *

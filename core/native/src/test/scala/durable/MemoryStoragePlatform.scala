@@ -3,6 +3,8 @@ package durable
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
 
+import durable.engine.{WorkflowRecord, PendingEvent}
+
 /**
  * Native platform implementation using TrieMap for thread-safe concurrent access.
  */

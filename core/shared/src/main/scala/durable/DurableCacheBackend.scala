@@ -3,6 +3,8 @@ package durable
 import scala.concurrent.Future
 import java.time.Instant
 
+import durable.engine.{WorkflowMetadata, WorkflowRecord, PendingEvent}
+
 /**
  * Marker trait for storage backends that handle workflow-level operations.
  *

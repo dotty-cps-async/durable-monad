@@ -4,6 +4,8 @@ import scala.collection.mutable
 import scala.concurrent.Future
 import java.time.Instant
 
+import durable.engine.{WorkflowMetadata, WorkflowRecord, PendingEvent}
+
 /**
  * In-memory backing store for testing and development.
  *

@@ -1,7 +1,7 @@
 package durable
 
 import com.github.rssh.appcontext.*
-import durable.engine.ConfigSource
+import durable.engine.{ConfigSource, WorkflowSessionRunner}
 
 /**
  * Configuration for WorkflowEngine.

@@ -6,7 +6,7 @@ import scala.util.{Try, Success, Failure}
 import java.time.Instant
 import cps.*
 import com.github.rssh.appcontext.*
-import durable.engine.ConfigSource
+import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowMetadata}
 
 /**
  * Durable[A] - A Monad describing a durable computation.

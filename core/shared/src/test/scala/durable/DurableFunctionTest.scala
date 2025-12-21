@@ -3,6 +3,8 @@ package durable
 import scala.concurrent.{Future, ExecutionContext}
 import munit.FunSuite
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Tests for DurableFunction - serializable workflow definitions.
  */

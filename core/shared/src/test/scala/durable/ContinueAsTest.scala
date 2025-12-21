@@ -4,6 +4,8 @@ import munit.FunSuite
 import scala.concurrent.{Future, ExecutionContext}
 import scala.concurrent.ExecutionContext.Implicits.global
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult, WorkflowMetadata}
+
 class ContinueAsTest extends FunSuite:
 
   // Test workflows using unified DurableFunction[Args, R, S]

@@ -5,7 +5,7 @@ import scala.util.{Success, Failure}
 import java.time.{Instant, Duration}
 
 import durable.*
-import durable.engine.{WorkflowStateCoordinator, TestHooks, TimerHandle, CoordinatorOp, SuspendResult, SendResult}
+import durable.engine.{WorkflowStateCoordinator, TestHooks, TimerHandle, CoordinatorOp, SuspendResult, SendResult, WorkflowSessionRunner, WorkflowSessionResult, WorkflowMetadata, WorkflowRecord}
 import durable.runtime.Scheduler
 import com.github.rssh.appcontext.*
 

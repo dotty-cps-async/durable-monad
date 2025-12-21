@@ -5,6 +5,8 @@ import scala.util.{Success, Failure}
 import munit.FunSuite
 import cps.*
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Tests for async activities - operations returning Future[T] that:
  * - Return immediately (parallel execution)

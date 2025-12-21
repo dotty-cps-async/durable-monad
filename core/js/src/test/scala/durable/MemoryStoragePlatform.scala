@@ -2,6 +2,8 @@ package durable
 
 import scala.collection.mutable
 
+import durable.engine.{WorkflowRecord, PendingEvent}
+
 /**
  * JS platform implementation using mutable.HashMap (single-threaded, no concurrency needed).
  */

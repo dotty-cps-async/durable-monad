@@ -1,11 +1,11 @@
-package durable
+package durable.engine
 
 import scala.concurrent.{Future, ExecutionContext, Promise}
 import scala.concurrent.duration.*
 import scala.util.{Try, Success, Failure}
 import scala.util.control.NonFatal
 
-import durable.engine.ConfigSource
+import durable.*
 import durable.runtime.Scheduler
 import com.github.rssh.appcontext.*
 
@@ -13,7 +13,7 @@ import com.github.rssh.appcontext.*
  * Stack frame types for the interpreter.
  * Distinguishes normal continuations from try handlers.
  */
-private[durable] enum StackFrame:
+private[engine] enum StackFrame:
   /** Normal continuation - only processes successful values */
   case Cont(f: Any => Durable[?])
   /** Try handler - processes both success and failure */

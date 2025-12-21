@@ -4,6 +4,8 @@ import scala.concurrent.{Future, ExecutionContext}
 import munit.FunSuite
 import cps.*
 
+import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+
 /**
  * Tests for WorkflowSessionRunner using async[Durable] syntax with preprocessor.
  *

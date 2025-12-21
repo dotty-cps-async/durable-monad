@@ -10,6 +10,8 @@ import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
 import scala.concurrent.Future
 
+import durable.engine.{WorkflowMetadata, WorkflowRecord, PendingEvent}
+
 /**
  * In-memory storage with JSON backup/restore for testing engine recovery.
  *
