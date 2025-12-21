@@ -85,13 +85,13 @@ class DurableContextAccessTest extends FunSuite:
     }
   }
 
-  test("Durable.appContext returns AppContext cache") {
+  test("RunContext.appContextCache returns AppContext cache") {
     val workflowId = WorkflowId("context-test-4")
 
     val workflow = async[Durable] {
-      val appCtx = await(Durable.appContext)
+      val runCtx = await(Durable.runContext)
       // Check that we got a cache instance
-      appCtx.isInstanceOf[AppContext.Cache]
+      runCtx.appContextCache.isInstanceOf[AppContext.Cache]
     }
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
@@ -205,12 +205,12 @@ class DurableContextAccessTest extends FunSuite:
     val workflow = async[Durable] {
       val wfId1 = await(Durable.workflowId)
       val backend1 = await(Durable.backend)
-      val ctx = await(Durable.runContext)
+      val runCtx = await(Durable.runContext)
       val wfId2 = await(Durable.workflowId)
-      val appCtx = await(Durable.appContext)
+      val appCtx = runCtx.appContextCache
 
       // All should provide consistent values
-      val allMatch = wfId1 == wfId2 && wfId1 == ctx.workflowId
+      val allMatch = wfId1 == wfId2 && wfId1 == runCtx.workflowId
       allMatch
     }
 

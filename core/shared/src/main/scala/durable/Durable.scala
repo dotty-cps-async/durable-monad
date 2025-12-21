@@ -178,13 +178,6 @@ object Durable:
     ctx.backend
 
   /**
-   * Access the AppContext cache inside async[Durable] blocks.
-   * NOT cached - fresh on each access during replay.
-   */
-  def appContext(using ctx: DurableContext): Durable[AppContext.Cache] =
-    ctx.appContext
-
-  /**
    * Access raw configuration for a section inside async[Durable] blocks.
    * NOT cached - configuration is always read fresh from ConfigSource.
    *
@@ -244,7 +237,7 @@ object Durable:
    */
   inline def env[R](using provider: AppContextProvider[R]): Durable[R] =
     WithSessionResource[R, R](
-      acquire = ctx => ctx.appContext.getOrCreate[R](provider.get),
+      acquire = ctx => ctx.appContextCache.getOrCreate[R](provider.get),
       release = _ => (),  // No release for cached resources
       use = r => Durable.pure(r)
     )
@@ -487,8 +480,8 @@ object Durable:
      * Access the AppContext cache at runtime.
      * NOT cached - fresh on each access during replay.
      */
-    def appContext: Durable[AppContext.Cache] =
-      Durable.LocalComputation(_.appContext)
+    def appContextCache: Durable[AppContext.Cache] =
+      Durable.LocalComputation(_.appContextCache)
 
     /**
      * Access raw configuration for a section.
