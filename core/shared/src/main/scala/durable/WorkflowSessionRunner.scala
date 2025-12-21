@@ -524,14 +524,13 @@ object WorkflowSessionRunner:
     /** Default configuration */
     val default: RunConfig = RunConfig()
 
-
-/**
- * Snapshot of workflow state for suspension and resumption.
- *
- * @param workflowId Unique identifier for the workflow instance
- * @param activityIndex The activity index to resume from
- */
-case class DurableSnapshot(
-  workflowId: WorkflowId,
-  activityIndex: Int
-)
+  /**
+   * Snapshot of workflow state for suspension and resumption.
+   *
+   * @param workflowId Unique identifier for the workflow instance
+   * @param activityIndex The activity index to resume from
+   */
+  case class DurableSnapshot(
+    workflowId: WorkflowId,
+    activityIndex: Int
+  )

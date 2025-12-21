@@ -125,7 +125,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
 
   private def handleSuspended(
     workflowId: WorkflowId,
-    snapshot: DurableSnapshot,
+    snapshot: WorkflowSessionRunner.DurableSnapshot,
     condition: EventQuery.Combined[?, ?]
   ): Future[Unit] =
     val activityIndex = snapshot.activityIndex
@@ -201,7 +201,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
 
   private def handleSuspendedInternal(
     workflowId: WorkflowId,
-    snapshot: DurableSnapshot,
+    snapshot: WorkflowSessionRunner.DurableSnapshot,
     condition: EventQuery.Combined[?, ?]
   ): Future[Unit] =
     val activityIndex = snapshot.activityIndex
