@@ -6,6 +6,7 @@ import scala.util.{Try, Success, Failure}
 import java.time.Instant
 import cps.*
 import com.github.rssh.appcontext.*
+import durable.engine.ConfigSource
 
 /**
  * Durable[A] - A Monad describing a durable computation.
@@ -182,6 +183,16 @@ object Durable:
    */
   def appContext(using ctx: DurableContext): Durable[AppContext.Cache] =
     ctx.appContext
+
+  /**
+   * Access raw configuration for a section inside async[Durable] blocks.
+   * NOT cached - configuration is always read fresh from ConfigSource.
+   *
+   * @param section Configuration section name (e.g., "database", "api.client")
+   * @return Durable[Option[String]] - Some(config) if found, None otherwise
+   */
+  def configRaw(section: String)(using ctx: DurableContext): Durable[Option[String]] =
+    ctx.configRaw(section)
 
   /**
    * Generic context accessor inside async[Durable] blocks.
@@ -478,6 +489,16 @@ object Durable:
      */
     def appContext: Durable[AppContext.Cache] =
       Durable.LocalComputation(_.appContext)
+
+    /**
+     * Access raw configuration for a section.
+     * NOT cached - configuration is always read fresh from ConfigSource.
+     *
+     * @param section Configuration section name (e.g., "database", "api.client")
+     * @return Durable[Option[String]] - Some(config) if found, None otherwise
+     */
+    def configRaw(section: String): Durable[Option[String]] =
+      Durable.LocalComputation(ctx => ctx.configSource.getRaw(section))
 
     /**
      * Generic context accessor.

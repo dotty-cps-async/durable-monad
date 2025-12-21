@@ -64,7 +64,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     activityOffset: Int,
     resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
-    val ctx = WorkflowSessionRunner.RunContext(workflowId, storage, config.appContext, resumeFromIndex, activityOffset, config.runConfig)
+    val ctx = WorkflowSessionRunner.RunContext(workflowId, storage, config.appContext, config.configSource, resumeFromIndex, activityOffset, config.runConfig)
     val runnerFuture = WorkflowSessionRunner.run(workflow, ctx)
     stateCoordinator.registerRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
 
@@ -170,7 +170,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     activityOffset: Int,
     resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
-    val ctx = WorkflowSessionRunner.RunContext(workflowId, storage, config.appContext, resumeFromIndex, activityOffset, config.runConfig)
+    val ctx = WorkflowSessionRunner.RunContext(workflowId, storage, config.appContext, config.configSource, resumeFromIndex, activityOffset, config.runConfig)
     val runnerFuture = WorkflowSessionRunner.run(workflow, ctx)
     stateCoordinator.registerRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
 

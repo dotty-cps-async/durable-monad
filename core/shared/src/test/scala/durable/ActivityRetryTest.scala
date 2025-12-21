@@ -4,6 +4,7 @@ import scala.concurrent.{Future, ExecutionContext}
 import scala.concurrent.duration.*
 import munit.FunSuite
 
+import durable.engine.ConfigSource
 import durable.runtime.Scheduler
 
 /**
@@ -27,7 +28,7 @@ class ActivityRetryTest extends FunSuite:
     }
 
     val workflowId = WorkflowId("retry-test-1")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(attemptCount, 1)
@@ -50,7 +51,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-2")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(attemptCount, 3)
@@ -70,7 +71,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-3")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 3)
@@ -112,7 +113,7 @@ class ActivityRetryTest extends FunSuite:
       scheduler = Scheduler.immediate
     )
     val workflowId = WorkflowId("retry-test-4")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, config)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, config, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // Only one attempt - no retries for non-recoverable
@@ -143,7 +144,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-5")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // No retry - IllegalStateException not in recoverable list
@@ -174,7 +175,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-6")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, config)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, config, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(events.size, 1)
@@ -201,7 +202,7 @@ class ActivityRetryTest extends FunSuite:
 
     // Resume from index 1 (activity at index 0 is cached)
     val workflowId = WorkflowId("retry-test-7")
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, testConfig, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) => assertEquals(value, 42)
@@ -223,7 +224,7 @@ class ActivityRetryTest extends FunSuite:
     )
 
     val workflowId = WorkflowId("retry-test-8")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig)
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId, testConfig, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Failed])
       assertEquals(attemptCount, 1) // Only one attempt with noRetry

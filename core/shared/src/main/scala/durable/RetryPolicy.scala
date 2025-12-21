@@ -62,6 +62,7 @@ object RetryPolicy:
       case _: InterruptedException => false
       case _: VirtualMachineError => false
       case _: LinkageError => false
+      case _: NonRecoverableException => false
       case _ => true
 
 

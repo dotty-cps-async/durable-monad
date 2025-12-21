@@ -718,6 +718,83 @@ def restart(): Unit =
   engine.recover()  // Workflows resume with fresh resources
 ```
 
+### Configuration Access
+
+Workflows often need access to external configuration (database URLs, API keys, service endpoints). The `ConfigSource` trait provides a simple way to access configuration without coupling workflows to specific configuration systems.
+
+**ConfigSource trait:**
+
+```scala
+trait ConfigSource:
+  def getRaw(section: String): Option[String]
+
+object ConfigSource:
+  val empty: ConfigSource = _ => None
+  def fromMap(entries: Map[String, String]): ConfigSource = entries.get(_)
+```
+
+**Accessing configuration in workflows:**
+
+```scala
+async[Durable] {
+  val dbConfig = await(Durable.configRaw("database"))
+    .getOrElse(throw ConfigNotFoundException("database"))
+  val config = parseJson[DbConfig](dbConfig)
+  val result = queryDatabase(config.url, "SELECT ...")
+  result
+}
+```
+
+**With AppContext caching (for expensive resources):**
+
+```scala
+async[Durable] {
+  val appCtx = await(Durable.appContext)
+  val db = appCtx.getOrCreate[DatabaseConnection] {
+    val raw = await(Durable.configRaw("database"))
+      .getOrElse(throw ConfigNotFoundException("database"))
+    val config = parseJson[ConnectionConfig](raw)
+    new DatabaseConnection(config.url, config.poolSize)
+  }
+  db.query("SELECT * FROM users")
+}
+```
+
+**Engine provides configuration:**
+
+```scala
+val configSource = ConfigSource.fromMap(Map(
+  "database" -> """{"url": "jdbc:postgresql://localhost/mydb", "poolSize": 10}""",
+  "api.client" -> """{"baseUrl": "https://api.example.com", "timeout": 5000}"""
+))
+
+val engine = WorkflowEngine(storage, WorkflowEngineConfig(
+  configSource = configSource
+))
+```
+
+**Non-recoverable exceptions for configuration errors:**
+
+Configuration errors (missing section, parse failure) should not be retried since they won't be fixed by retrying. Use `NonRecoverableException` marker trait:
+
+```scala
+case class ConfigNotFoundException(section: String)
+  extends RuntimeException(s"Config section not found: $section")
+  with NonRecoverableException
+
+case class ConfigParseException(section: String, cause: Throwable)
+  extends RuntimeException(s"Failed to parse config section: $section", cause)
+  with NonRecoverableException
+```
+
+Activities throwing `NonRecoverableException` fail immediately without retry attempts.
+
+**Key characteristics:**
+- Configuration is NOT cached (read fresh from ConfigSource on each access)
+- `Durable.configRaw(section)` returns `Durable[Option[String]]`
+- Use `NonRecoverableException` for config errors to skip retries
+- Combine with `AppContext.Cache` for caching parsed configuration or created resources
+
 ### Runtime Context Access
 
 Workflows can access runtime context (workflowId, storage backend, AppContext cache) inside `async[Durable]` blocks. Context access is NOT cached - it returns fresh values on each access during replay.
