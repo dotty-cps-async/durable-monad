@@ -20,3 +20,7 @@ Thumbs.db
 
 # Generated
 node_modules/
+
+# Local docs (not tracked)
+docs/brainshtorm/
+docs/local/
