@@ -78,7 +78,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
 
     // Pre-populate cache
     backing.put(workflowId, 0, Right(42))
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -122,7 +122,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
     // Pre-populate cache with first two values
     backing.put(workflowId, 0, Right(10))
     backing.put(workflowId, 1, Right(20))
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 2, 0)
 
     var executeCount = 0
     val workflow: Durable[Int] = async[DurableRaw] {
@@ -222,7 +222,7 @@ class WorkflowSessionRunnerRawTest extends FunSuite:
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     val workflow: Durable[WorkflowId] = async[DurableRaw] {
-      await(DurableRaw(Durable.local(ctx => ctx.workflowId)))
+      await(DurableRaw.local(ctx => ctx.workflowId))
     }.toDurable
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>

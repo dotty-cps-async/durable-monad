@@ -185,7 +185,7 @@ class DurableContextAccessTest extends FunSuite:
           assertEquals(value1, "context-test-7-computed")
 
           // Second run with resume (simulating replay behavior)
-          val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
+          val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
           val result2 = await(WorkflowSessionRunner.run(workflow, ctx2))
 
           result2 match

@@ -704,17 +704,31 @@ object WorkflowSessionRunner:
     def fresh(workflowId: WorkflowId, config: RunConfig, appContextCache: AppContext.Cache, configSource: ConfigSource)(using backend: DurableStorageBackend): RunContext =
       RunContext(workflowId, backend, appContextCache, configSource, resumeFromIndex = 0, config = config)
 
-    /** Create a context for resuming from a specific index (uses empty ConfigSource - for testing) */
-    def resume(workflowId: WorkflowId, resumeFromIndex: Int)(using backend: DurableStorageBackend): RunContext =
-      RunContext(workflowId, backend, AppContext.newCache, ConfigSource.empty, resumeFromIndex)
-
-    /** Create a context for resuming with custom run configuration and config source */
-    def resume(workflowId: WorkflowId, resumeFromIndex: Int, config: RunConfig, configSource: ConfigSource)(using backend: DurableStorageBackend): RunContext =
-      RunContext(workflowId, backend, AppContext.newCache, configSource, resumeFromIndex, config = config)
-
-    /** Create a context for resuming with full custom configuration */
-    def resume(workflowId: WorkflowId, resumeFromIndex: Int, config: RunConfig, appContextCache: AppContext.Cache, configSource: ConfigSource)(using backend: DurableStorageBackend): RunContext =
-      RunContext(workflowId, backend, appContextCache, configSource, resumeFromIndex, config = config)
+    /**
+     * Create a context for resuming from a specific index.
+     *
+     * For DurableFunction workflows, activityOffset should equal argCount because:
+     * - Arguments are stored at indices 0..argCount-1
+     * - Activities should start at index argCount to avoid index conflicts
+     *
+     * For simple workflows without stored arguments, use activityOffset = 0.
+     *
+     * @param workflowId The workflow ID
+     * @param resumeFromIndex First index to execute fresh (indices below are replayed)
+     * @param activityOffset Starting index for activity numbering (argCount for DurableFunction, 0 for simple workflows)
+     * @param config Runtime configuration
+     * @param configSource Source for configuration values
+     * @param appContextCache Cache for AppContext
+     */
+    def resume(
+      workflowId: WorkflowId,
+      resumeFromIndex: Int,
+      activityOffset: Int,
+      config: RunConfig = RunConfig.default,
+      configSource: ConfigSource = ConfigSource.empty,
+      appContextCache: AppContext.Cache = AppContext.newCache
+    )(using backend: DurableStorageBackend): RunContext =
+      RunContext(workflowId, backend, appContextCache, configSource, resumeFromIndex, activityOffset, config)
 
     /** Create a context for resuming from snapshot (uses empty ConfigSource - for testing) */
     def fromSnapshot(snapshot: DurableSnapshot)(using backend: DurableStorageBackend): RunContext =

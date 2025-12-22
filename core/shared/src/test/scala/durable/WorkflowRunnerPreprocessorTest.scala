@@ -80,7 +80,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
       // Second run - replay from cache
       executeCount = 0
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount, 0)
       WorkflowSessionRunner.run(makeWorkflow(() => executeCount += 1), ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
         assertEquals(executeCount, 0, "Should not re-execute on replay")
@@ -134,7 +134,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
       // Replay - condition should be cached
       condCount = 0
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount, 0)
       WorkflowSessionRunner.run(makeWorkflow(getCond), ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
         assertEquals(condCount, 0, "Condition should be replayed from cache")
@@ -165,7 +165,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
       // Replay - scrutinee should be cached
       scrutineeCount = 0
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount, 0)
       WorkflowSessionRunner.run(makeWorkflow(getScrutinee), ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, "two"))
         assertEquals(scrutineeCount, 0, "Scrutinee should be replayed from cache")

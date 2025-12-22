@@ -153,7 +153,7 @@ object ProcessB:
     )
 
     // Resume from saved index + 1 (past the suspend point)
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, metadata.activityIndex + 1)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, metadata.activityIndex + 1, 0)
 
     println(s"[ProcessB] Resuming workflow from index ${metadata.activityIndex + 1}")
 

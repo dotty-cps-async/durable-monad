@@ -80,10 +80,10 @@ class SubscriptionBillingTest extends FunSuite:
 
     val workflow = SubscriptionBillingWorkflow(subscriptionId, BigDecimal(0), 0)
     val ctx = WorkflowSessionRunner.RunContext.resume(
-      workflowId, 6,
+      workflowId, 6, 0,
       config = WorkflowSessionRunner.RunConfig.default,
-      appContextCache = appContextCache,
-      configSource = ConfigSource.empty
+      configSource = ConfigSource.empty,
+      appContextCache = appContextCache
     )
 
     backing.storeWinningCondition(workflowId, 5, TimerInstant(now)).flatMap { _ =>
@@ -229,10 +229,10 @@ class SubscriptionBillingTest extends FunSuite:
 
     val workflow = SubscriptionRetryWorkflow(subscriptionId, BigDecimal(10.00), 1, 1)
     val ctx = WorkflowSessionRunner.RunContext.resume(
-      workflowId, 2,
+      workflowId, 2, 0,
       config = WorkflowSessionRunner.RunConfig.default,
-      appContextCache = appContextCache,
-      configSource = ConfigSource.empty
+      configSource = ConfigSource.empty,
+      appContextCache = appContextCache
     )
 
     backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>

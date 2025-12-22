@@ -70,10 +70,10 @@ class CustomerOnboardingTest extends FunSuite:
     // activityService.activeUsers is empty -> user inactive
     val workflow = CustomerOnboardingWorkflow(customerId)
     val ctx = WorkflowSessionRunner.RunContext.resume(
-      workflowId, 2,
+      workflowId, 2, 0,
       config = WorkflowSessionRunner.RunConfig.default,
-      appContextCache = appContextCache,
-      configSource = ConfigSource.empty
+      configSource = ConfigSource.empty,
+      appContextCache = appContextCache
     )
 
     backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>
@@ -113,10 +113,10 @@ class CustomerOnboardingTest extends FunSuite:
 
     val workflow = CustomerOnboardingWorkflow(customerId)
     val ctx = WorkflowSessionRunner.RunContext.resume(
-      workflowId, 2,
+      workflowId, 2, 0,
       config = WorkflowSessionRunner.RunConfig.default,
-      appContextCache = appContextCache,
-      configSource = ConfigSource.empty
+      configSource = ConfigSource.empty,
+      appContextCache = appContextCache
     )
 
     backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>

@@ -60,22 +60,21 @@ class WorkflowSessionRunnerTest extends FunSuite:
   }
 
   test("run local computation") {
-    withStorage {
-      val workflowId = WorkflowId("test-4")
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("test-4")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-      var computed = false
-      val workflow = Durable.local[Int] { _ =>
-        computed = true
-        42
-      }
+    var computed = false
+    val workflow = Durable.localCached[Int, MemoryBackingStore] { _ =>
+      computed = true
+      42
+    }
 
-      assertEquals(computed, false) // not computed yet
+    assertEquals(computed, false) // not computed yet
 
-      WorkflowSessionRunner.run(workflow, ctx).map { result =>
-        assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
-        assertEquals(computed, true) // now computed
-      }
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 42))
+      assertEquals(computed, true) // now computed
     }
   }
 
@@ -104,7 +103,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
 
     // Resume from index 1 (after index 0 is cached)
     val workflowId = WorkflowId("test-6")
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
 
     var executeCount = 0
     val workflow = Durable.activity {
@@ -184,7 +183,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
     backing.put(workflowId, 1, Right(20))
 
     // Resume from index 2 (first two cached)
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 2, 0)
 
     var executeCount = 0
     val workflow = for
@@ -200,18 +199,17 @@ class WorkflowSessionRunnerTest extends FunSuite:
     }
   }
 
-  test("local computation has access to context") {
-    withStorage {
-      val workflowId = WorkflowId("test-11")
+  test("localCached computation has access to context") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("test-11")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-      val workflow = Durable.local[WorkflowId] { ctx =>
-        ctx.workflowId
-      }
+    val workflow = Durable.localCached[WorkflowId, MemoryBackingStore] { ctx =>
+      ctx.workflowId
+    }
 
-      WorkflowSessionRunner.run(workflow, ctx).map { result =>
-        assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, WorkflowId("test-11")))
-      }
+    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, WorkflowId("test-11")))
     }
   }
 

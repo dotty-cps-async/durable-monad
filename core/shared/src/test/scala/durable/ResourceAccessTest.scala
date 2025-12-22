@@ -179,7 +179,7 @@ class ResourceAccessTest extends FunSuite:
           fail(s"Expected Completed, got $other")
 
       // Replay - resource is created fresh but activity replays from cache
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1) // Resume past the activity
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0) // Resume past the activity
       val res2 = await(WorkflowSessionRunner.run(workflow, ctx2))
       res2 match
         case WorkflowSessionResult.Completed(_, value) =>
@@ -267,4 +267,166 @@ class ResourceAccessTest extends FunSuite:
 
     ephemeral.release("test2")
     assertEquals(releaseCount, 2)
+  }
+
+  // Test resource that tracks creation and release for preprocessor auto-detection
+  class TrackedResource:
+    var released = false
+    def doWork(): String = "work-done"
+
+  test("DurableEphemeral auto-releases at end of async block") {
+    val workflowId = WorkflowId("ephemeral-auto-release-1")
+    val resource = new TrackedResource
+
+    // Define DurableEphemeral for TrackedResource - preprocessor should detect this
+    given DurableEphemeral[TrackedResource] = DurableEphemeral(r => r.released = true)
+
+    val workflow = async[Durable] {
+      // The preprocessor should detect this val has DurableEphemeral and wrap rest in withResource
+      val r: TrackedResource = resource
+      r.doWork()
+    }
+
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+    val result = async[Future] {
+      await(WorkflowSessionRunner.run(workflow, ctx))
+    }
+
+    async[Future] {
+      val res = await(result)
+      res match
+        case WorkflowSessionResult.Completed(_, value) =>
+          assertEquals(value, "work-done")
+          assert(resource.released, "Resource should be released after async block completes")
+        case other =>
+          fail(s"Expected Completed, got $other")
+    }
+  }
+
+  test("DurableEphemeral auto-releases on failure in async block") {
+    val workflowId = WorkflowId("ephemeral-auto-release-failure-1")
+    val resource = new TrackedResource
+
+    given DurableEphemeral[TrackedResource] = DurableEphemeral(r => r.released = true)
+
+    val workflow = async[Durable] {
+      val r: TrackedResource = resource
+      throw RuntimeException("Intentional failure")
+      r.doWork() // Never reached
+    }
+
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+    val result = async[Future] {
+      await(WorkflowSessionRunner.run(workflow, ctx))
+    }
+
+    async[Future] {
+      val res = await(result)
+      res match
+        case WorkflowSessionResult.Failed(_, error) =>
+          val cause = error match
+            case re: ReplayedException => re.stored.message
+            case e => e.getMessage
+          assertEquals(cause, "Intentional failure")
+          assert(resource.released, "Resource should be released even after failure")
+        case other =>
+          fail(s"Expected Failed, got $other")
+    }
+  }
+
+  // Test for DurableEphemeral behavior with continueWith
+  // Tracks allocations and releases across multiple iterations
+
+  // Shared tracker for continueWith test - needs to be at class level
+  // so it's visible when the workflow object is compiled
+  object ContinueWithTestTracker:
+    var allocations: List[Int] = Nil
+    var releases: List[Int] = Nil
+    def reset(): Unit =
+      allocations = Nil
+      releases = Nil
+
+  class IterationResource(val iteration: Int):
+    ContinueWithTestTracker.allocations = ContinueWithTestTracker.allocations :+ iteration
+    def doWork(): String = s"work-$iteration"
+
+  // DurableEphemeral needs to be at class level so preprocessor can see it
+  given iterationResourceEphemeral: DurableEphemeral[IterationResource] = DurableEphemeral { r =>
+    ContinueWithTestTracker.releases = ContinueWithTestTracker.releases :+ r.iteration
+  }
+
+  // Workflow object using explicit withResource to verify release mechanism works
+  object ResourceContinueWorkflow extends DurableFunction1[Int, String, MemoryBackingStore] derives DurableFunctionName:
+    override val functionName = DurableFunction.register(this)
+
+    def apply(count: Int)(using MemoryBackingStore): Durable[String] =
+      Durable.withResource(
+        acquire = new IterationResource(count),
+        release = (r: IterationResource) => {
+          ContinueWithTestTracker.releases = ContinueWithTestTracker.releases :+ r.iteration
+        }
+      ) { r =>
+        async[Durable] {
+          val result = r.doWork()
+          if count <= 1 then
+            result
+          else
+            await(continueWith(count - 1))
+        }
+      }
+
+  test("DurableEphemeral with continueWith - releases resource on each ContinueAs") {
+    import cps.*
+
+    // Reset the tracker before the test
+    ContinueWithTestTracker.reset()
+
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
+    // Run iterations using async/await for proper Future handling
+    val workflowId = WorkflowId("ephemeral-continue-test")
+
+    async[Future] {
+      // First iteration (count=3)
+      val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
+      val result1 = await(WorkflowSessionRunner.run(ResourceContinueWorkflow(3), ctx1))
+
+      result1 match
+        case WorkflowSessionResult.ContinueAs(metadata, storeArgs, nextWorkflow) =>
+          // First iteration: allocated=3, released=3
+          assertEquals(ContinueWithTestTracker.allocations, List(3), "Should have allocated for iteration 3")
+          assertEquals(ContinueWithTestTracker.releases, List(3), "Should have released for iteration 3")
+
+          // Store args and run second iteration
+          await(storeArgs(backing, workflowId, scala.concurrent.ExecutionContext.global))
+          // Use resume with activityOffset = argCount so activities start after stored args
+          val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, metadata.argCount, metadata.argCount)
+          val result2 = await(WorkflowSessionRunner.run(nextWorkflow(), ctx2))
+
+          result2 match
+            case WorkflowSessionResult.ContinueAs(metadata2, storeArgs2, nextWorkflow2) =>
+              // Second iteration: allocated=3,2, released=3,2
+              assertEquals(ContinueWithTestTracker.allocations, List(3, 2), "Should have allocated for iterations 3 and 2")
+              assertEquals(ContinueWithTestTracker.releases, List(3, 2), "Should have released for iterations 3 and 2")
+
+              // Store args and run third iteration
+              await(storeArgs2(backing, workflowId, scala.concurrent.ExecutionContext.global))
+              val ctx3 = WorkflowSessionRunner.RunContext.resume(workflowId, metadata2.argCount, metadata2.argCount)
+              val result3 = await(WorkflowSessionRunner.run(nextWorkflow2(), ctx3))
+
+              result3 match
+                case WorkflowSessionResult.Completed(_, value) =>
+                  // Third (final) iteration: allocated=3,2,1, released=3,2,1
+                  assertEquals(value, "work-1")
+                  assertEquals(ContinueWithTestTracker.allocations, List(3, 2, 1), "Should have allocated for all iterations")
+                  assertEquals(ContinueWithTestTracker.releases, List(3, 2, 1), "Should have released for all iterations")
+                case other =>
+                  fail(s"Expected Completed on third iteration, got $other")
+
+            case other =>
+              fail(s"Expected ContinueAs on second iteration, got $other")
+
+        case other =>
+          fail(s"Expected ContinueAs on first iteration, got $other")
+    }
   }

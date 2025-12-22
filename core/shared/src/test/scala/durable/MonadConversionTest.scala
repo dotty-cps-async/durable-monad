@@ -108,7 +108,7 @@ class MonadConversionTest extends FunSuite:
     assertEquals(creationBeforeRun, 0, "Future NOT created when building tree (lazy)")
 
     // Resume from index 1 (after the cached activity)
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1)(using freshBackend)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)(using freshBackend)
     WorkflowSessionRunner.run(durable, ctx).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>

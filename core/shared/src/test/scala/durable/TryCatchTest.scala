@@ -190,7 +190,7 @@ class TryCatchTest extends FunSuite:
       assertEquals(callCount, 1)
 
       // Replay should use cached value - resumeFromIndex=1 means index 0 is replayed from cache
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("try-catch-8"), 1, testConfig, ConfigSource.empty)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("try-catch-8"), 1, 0, testConfig, ConfigSource.empty)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(ctx.workflowId, 11))
         assertEquals(callCount, 1)  // Not called again
@@ -198,12 +198,12 @@ class TryCatchTest extends FunSuite:
     }
   }
 
-  test("error from local computation is caught") {
+  test("error from localCached computation is caught") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
     val workflow = async[Durable] {
       try {
-        await(Durable.local[Int](_ => throw RuntimeException("local failed")))
+        await(Durable.localCached[Int, MemoryBackingStore](_ => throw RuntimeException("local failed")))
       } catch {
         case e: RuntimeException => 99
       }

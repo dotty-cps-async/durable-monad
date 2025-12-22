@@ -76,7 +76,7 @@ class DurablePreprocessorTest extends FunSuite:
 
       // Second run - replay from cache
       computeCount.reset()
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2, 0)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
         assertEquals(computeCount.get, 0) // NOT recomputed - from cache
@@ -248,7 +248,7 @@ class DurablePreprocessorTest extends FunSuite:
 
       // Second run (replay) - should use cached condition value (true)
       // even though nonDeterministicCondition() would now return false
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2)  // both condition and result cached
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2, 0)  // both condition and result cached
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))  // same result
         assertEquals(condCallCount.get, 0)  // condition NOT re-evaluated
@@ -298,7 +298,7 @@ class DurablePreprocessorTest extends FunSuite:
 
       // Second run (replay) - should use cached scrutinee value (1)
       // even though nonDeterministicValue() would now return 2
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 3)  // x, scrutinee, and result cached
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 3, 0)  // x, scrutinee, and result cached
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))  // same result
         assertEquals(scrutineeCallCount.get, 0)  // scrutinee NOT re-evaluated
@@ -371,7 +371,7 @@ class DurablePreprocessorTest extends FunSuite:
       computeCount.reset()
 
       // Replay - resource created fresh (user expression runs), but activity cached
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)  // 1 cached activity
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)  // 1 cached activity
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 50))  // Same cached result
         assertEquals(releaseCount.get, 1)  // Resource released
@@ -465,7 +465,7 @@ class DurablePreprocessorTest extends FunSuite:
       // DON'T reset callCount - this simulates the counter persisting across runs
 
       // Replay from index 1 (nonDetValue cached, cached val IS cached)
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         // With localCached, function should NOT be called again on replay
         assertEquals(callCount.get, 1, "Durable.localCached.await was re-evaluated on replay!")
@@ -499,7 +499,7 @@ class DurablePreprocessorTest extends FunSuite:
       assertEquals(callCount.get, 1)
 
       // Replay from index 2 (condition + branch cached)
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2, 0)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         // With localCached, function should NOT be called again on replay
         assertEquals(callCount.get, 1, "Durable.localCached.await was re-evaluated on replay!")
@@ -540,7 +540,7 @@ class DurablePreprocessorTest extends FunSuite:
       // Replay - all vals should be cached
       computeCounter.reset()
       val numCached = backing.size
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, numCached)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, numCached, 0)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 12))
         assertEquals(computeCounter.get, 0)  // NOT recomputed - from cache

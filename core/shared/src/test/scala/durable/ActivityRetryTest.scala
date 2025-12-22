@@ -202,7 +202,7 @@ class ActivityRetryTest extends FunSuite:
 
     // Resume from index 1 (activity at index 0 is cached)
     val workflowId = WorkflowId("retry-test-7")
-    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, testConfig, ConfigSource.empty)
+    val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0, testConfig, ConfigSource.empty)
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) => assertEquals(value, 42)

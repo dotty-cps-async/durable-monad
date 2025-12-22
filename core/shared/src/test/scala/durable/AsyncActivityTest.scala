@@ -74,7 +74,7 @@ class AsyncActivityTest extends FunSuite:
 
           // Second run - replay from cache
           callCount = 0
-          val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
+          val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
           WorkflowSessionRunner.run(workflow, ctx2).flatMap {
             case WorkflowSessionResult.Completed(_, futureResult2) =>
               futureResult2.map { value2 =>
@@ -119,7 +119,7 @@ class AsyncActivityTest extends FunSuite:
 
             // Second run - replays failure from cache
             callCount = 0
-            val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
+            val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
             WorkflowSessionRunner.run(workflow, ctx2).flatMap {
               case WorkflowSessionResult.Completed(_, futureResult2) =>
                 futureResult2.transformWith {

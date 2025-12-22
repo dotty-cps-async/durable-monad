@@ -69,7 +69,7 @@ class DurableRawTest extends FunSuite:
 
       // Second run (replay) - x is replayed from cache
       computeCount = 0
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("raw-explicit-1"), 1)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("raw-explicit-1"), 1, 0)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(ctx.workflowId, 43))
         assertEquals(computeCount, 0, "With explicit activity, val is cached on replay")
