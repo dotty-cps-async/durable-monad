@@ -488,7 +488,6 @@ object Durable:
      */
     def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy, sourcePos: SourcePos = SourcePos.unknown)
                        (using storage: DurableStorage[A, S]): Durable[A] =
-      println(s"[DEBUG] activitySync called at $sourcePos")
       Durable.Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy, sourcePos)
 
     /**
@@ -503,7 +502,6 @@ object Durable:
      */
     def activitySync_async[A, S <: DurableStorageBackend](compute: () => Durable[A], policy: RetryPolicy, sourcePos: SourcePos = SourcePos.unknown)
                              (using storage: DurableStorage[A, S]): Durable[A] =
-      println(s"[DEBUG] activitySync_async called at $sourcePos")
       // Use FlatMapCached to cache the result and skip inner activities on replay
       Durable.FlatMapCached(Durable.Pure(()), _ => compute(), storage, sourcePos)
 

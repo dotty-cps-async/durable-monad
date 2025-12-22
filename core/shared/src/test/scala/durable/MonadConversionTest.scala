@@ -27,7 +27,7 @@ class MonadConversionTest extends FunSuite:
 
     // Should create FlatMap(Activity(...), ...)
     durable match
-      case Durable.FlatMap(Durable.Activity(_, _, _), _) => () // ok
+      case Durable.FlatMap(Durable.Activity(_, _, _, _), _) => () // ok
       case other => fail(s"Expected FlatMap(Activity(...), ...), got: $other")
   }
 
@@ -43,14 +43,11 @@ class MonadConversionTest extends FunSuite:
 
     // Should be nested FlatMaps with Activities
     durable match
-      case Durable.FlatMap(Durable.Activity(_, _, _), _) => () // ok - first layer
+      case Durable.FlatMap(Durable.Activity(_, _, _, _), _) => () // ok - first layer
       case other => fail(s"Expected FlatMap structure, got: $other")
   }
 
   test("Future.await runs and caches correctly with runner") {
-    import scala.concurrent.Await
-    import scala.concurrent.duration._
-
     var callCount = 0
     def makeFuture(): Future[Int] = {
       callCount += 1
@@ -67,24 +64,18 @@ class MonadConversionTest extends FunSuite:
     }
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)(using freshBackend)
-    val result = Await.result(
-      WorkflowSessionRunner.run(durable, ctx),
-      5.seconds
-    )
-
-    result match
-      case WorkflowSessionResult.Completed(_, value) =>
-        assertEquals(value, 43)
-        assertEquals(callCount, 1, "Future should be called once")
-        // Verify cached at index 0
-        assert(freshBackend.get(workflowId, 0).isDefined, "Should cache at index 0")
-      case other => fail(s"Expected Completed, got: $other")
+    WorkflowSessionRunner.run(durable, ctx).map { result =>
+      result match
+        case WorkflowSessionResult.Completed(_, value) =>
+          assertEquals(value, 43)
+          assertEquals(callCount, 1, "Future should be called once")
+          // Verify cached at index 0
+          assert(freshBackend.get(workflowId, 0).isDefined, "Should cache at index 0")
+        case other => fail(s"Expected Completed, got: $other")
+    }
   }
 
   test("Future.await replays cached RESULT with lazy Future creation") {
-    import scala.concurrent.Await
-    import scala.concurrent.duration._
-
     // NOTE: With preprocessor transformation, Future is wrapped in a thunk/lambda.
     // This means Future creation is deferred until the activity actually runs.
     // On replay, the cached result is used and the Future is never created.
@@ -118,18 +109,15 @@ class MonadConversionTest extends FunSuite:
 
     // Resume from index 1 (after the cached activity)
     val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1)(using freshBackend)
-    val result = Await.result(
-      WorkflowSessionRunner.run(durable, ctx),
-      5.seconds
-    )
-
-    result match
-      case WorkflowSessionResult.Completed(_, value) =>
-        // Should use cached value 100 + 1 = 101
-        assertEquals(value, 101, "Should use cached value 100 + 1")
-        // Future creation should STILL be 0 because we replayed from cache
-        assertEquals(futureCreationCount, 0, "Future not created during replay")
-        // No execution during replay
-        assertEquals(futureExecutionCount, 0, "No execution during replay")
-      case other => fail(s"Expected Completed, got: $other")
+    WorkflowSessionRunner.run(durable, ctx).map { result =>
+      result match
+        case WorkflowSessionResult.Completed(_, value) =>
+          // Should use cached value 100 + 1 = 101
+          assertEquals(value, 101, "Should use cached value 100 + 1")
+          // Future creation should STILL be 0 because we replayed from cache
+          assertEquals(futureCreationCount, 0, "Future not created during replay")
+          // No execution during replay
+          assertEquals(futureExecutionCount, 0, "No execution during replay")
+        case other => fail(s"Expected Completed, got: $other")
+    }
   }

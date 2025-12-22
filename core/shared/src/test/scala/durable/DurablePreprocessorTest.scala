@@ -531,21 +531,17 @@ class DurablePreprocessorTest extends FunSuite:
       results.sum
     }
 
-    // First run with tracing enabled
-    val traceConfig = WorkflowSessionRunner.RunConfig(traceEnabled = true)
-    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId, traceConfig, ConfigSource.empty)
+    // First run
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 12))  // (1*2) + (2*2) + (3*2) = 12
       assertEquals(computeCounter.get, 3)  // computed for each item
 
-      println(s"After first run: backing.size = ${backing.size}")
-
       // Replay - all vals should be cached
       computeCounter.reset()
       val numCached = backing.size
-      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, numCached, traceConfig, ConfigSource.empty)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, numCached)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
-        println(s"After replay: computeCount = ${computeCounter.get}")
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 12))
         assertEquals(computeCounter.get, 0)  // NOT recomputed - from cache
       }

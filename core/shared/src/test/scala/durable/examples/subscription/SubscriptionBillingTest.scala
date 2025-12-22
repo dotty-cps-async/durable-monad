@@ -2,13 +2,12 @@ package durable.examples.subscription
 
 import munit.FunSuite
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
 import java.time.Instant
 
 import com.github.rssh.appcontext.*
 import durable.*
 import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowSessionResult}
-import scala.concurrent.Await
-import scala.concurrent.duration._
 
 class SubscriptionBillingTest extends FunSuite:
   import MemoryBackingStore.given
@@ -77,7 +76,6 @@ class SubscriptionBillingTest extends FunSuite:
     backing.put(workflowId, 2, Right(()))
     backing.put(workflowId, 3, Right(BigDecimal(9.99))) // newTotal = 0 + 9.99
     backing.put(workflowId, 4, Right(1)) // newCycles = 0 + 1
-    Await.result(backing.storeWinningCondition(workflowId, 5, TimerInstant(now)), 1.second)
     backing.put(workflowId, 5, Right(TimeReached(now, now)))
 
     val workflow = SubscriptionBillingWorkflow(subscriptionId, BigDecimal(0), 0)
@@ -88,13 +86,15 @@ class SubscriptionBillingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
-      result match
-        case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
-          assertEquals(metadata.functionName, "durable.examples.subscription.SubscriptionBillingWorkflow")
-          assertEquals(metadata.argCount, 3)
-        case other =>
-          fail(s"Expected ContinueAs, got $other")
+    backing.storeWinningCondition(workflowId, 5, TimerInstant(now)).flatMap { _ =>
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        result match
+          case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
+            assertEquals(metadata.functionName, "durable.examples.subscription.SubscriptionBillingWorkflow")
+            assertEquals(metadata.argCount, 3)
+          case other =>
+            fail(s"Expected ContinueAs, got $other")
+      }
     }
   }
 
@@ -225,7 +225,6 @@ class SubscriptionBillingTest extends FunSuite:
     // 1: sleep (TimeReached) - 1-day backoff
     val now = Instant.now()
     backing.put(workflowId, 0, Right(false)) // retryCount <= MaxPaymentRetries
-    Await.result(backing.storeWinningCondition(workflowId, 1, TimerInstant(now)), 1.second)
     backing.put(workflowId, 1, Right(TimeReached(now, now)))
 
     val workflow = SubscriptionRetryWorkflow(subscriptionId, BigDecimal(10.00), 1, 1)
@@ -236,15 +235,17 @@ class SubscriptionBillingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
-      result match
-        case WorkflowSessionResult.Suspended(_, condition) =>
-          // After successful retry, should suspend waiting for remaining billing period
-          assert(condition.hasTimer, "Should be waiting for remaining billing period timer")
-          // Invoice should have been sent
-          assert(notificationService.invoicesSent.exists(_._1 == subscriptionId), "Invoice should be sent")
-        case other =>
-          fail(s"Expected Suspended for remaining billing period, got $other")
+    backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        result match
+          case WorkflowSessionResult.Suspended(_, condition) =>
+            // After successful retry, should suspend waiting for remaining billing period
+            assert(condition.hasTimer, "Should be waiting for remaining billing period timer")
+            // Invoice should have been sent
+            assert(notificationService.invoicesSent.exists(_._1 == subscriptionId), "Invoice should be sent")
+          case other =>
+            fail(s"Expected Suspended for remaining billing period, got $other")
+      }
     }
   }
 

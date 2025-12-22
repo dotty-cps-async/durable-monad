@@ -2,13 +2,12 @@ package durable.examples.onboarding
 
 import munit.FunSuite
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
 import java.time.Instant
 
 import com.github.rssh.appcontext.*
 import durable.*
 import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowSessionResult}
-import scala.concurrent.Await
-import scala.concurrent.duration._
 
 class CustomerOnboardingTest extends FunSuite:
   import MemoryBackingStore.given
@@ -66,7 +65,6 @@ class CustomerOnboardingTest extends FunSuite:
     val now = Instant.now()
     backing.put(workflowId, 0, Right(())) // sendWelcomeEmail completed
     // For Suspend replay: store winning condition AND value
-    Await.result(backing.storeWinningCondition(workflowId, 1, TimerInstant(now)), 1.second)
     backing.put(workflowId, 1, Right(TimeReached(now, now))) // sleep completed
 
     // activityService.activeUsers is empty -> user inactive
@@ -78,13 +76,15 @@ class CustomerOnboardingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
-      result match
-        case WorkflowSessionResult.Completed(_, value) =>
-          assertEquals(value, OnboardingResult.ReminderSent)
-          assert(emailService.reminderEmailsSent.contains(customerId), "Reminder should be sent")
-        case other =>
-          fail(s"Expected Completed with ReminderSent, got $other")
+    backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        result match
+          case WorkflowSessionResult.Completed(_, value) =>
+            assertEquals(value, OnboardingResult.ReminderSent)
+            assert(emailService.reminderEmailsSent.contains(customerId), "Reminder should be sent")
+          case other =>
+            fail(s"Expected Completed with ReminderSent, got $other")
+      }
     }
   }
 
@@ -109,7 +109,6 @@ class CustomerOnboardingTest extends FunSuite:
     val now = Instant.now()
     backing.put(workflowId, 0, Right(())) // sendWelcomeEmail completed
     // For Suspend replay: store winning condition AND value
-    Await.result(backing.storeWinningCondition(workflowId, 1, TimerInstant(now)), 1.second)
     backing.put(workflowId, 1, Right(TimeReached(now, now))) // sleep completed
 
     val workflow = CustomerOnboardingWorkflow(customerId)
@@ -120,12 +119,14 @@ class CustomerOnboardingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
-      result match
-        case WorkflowSessionResult.Completed(_, value) =>
-          assertEquals(value, OnboardingResult.ActiveUser)
-          assert(emailService.reminderEmailsSent.isEmpty, "Reminder should NOT be sent for active user")
-        case other =>
-          fail(s"Expected Completed with ActiveUser, got $other")
+    backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>
+      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+        result match
+          case WorkflowSessionResult.Completed(_, value) =>
+            assertEquals(value, OnboardingResult.ActiveUser)
+            assert(emailService.reminderEmailsSent.isEmpty, "Reminder should NOT be sent for active user")
+          case other =>
+            fail(s"Expected Completed with ActiveUser, got $other")
+      }
     }
   }

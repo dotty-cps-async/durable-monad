@@ -32,10 +32,12 @@ lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   )
   .jsSettings(
     // JS-specific settings
-    scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.ESModule) }
+    scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.ESModule) },
+    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time" % "2.6.0"
   )
   .nativeSettings(
     // Native-specific settings
+    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time" % "2.6.0"
   )
 
 lazy val coreJVM = core.jvm

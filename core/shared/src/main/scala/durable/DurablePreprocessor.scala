@@ -486,13 +486,11 @@ object DurablePreprocessor:
      * When a val has WorkflowSessionResource[T], wraps the rest of the block in WithSessionResource.
      */
     def transformBlockStatements(stats: List[Statement], expr: Term, isReturnPosition: Boolean): Term =
-      println(s"[PREPROC] transformBlockStatements: stats.size=${stats.size}, expr=${expr.show.take(50)}, isReturnPosition=$isReturnPosition")
       stats match
         case Nil =>
           transformTopLevel(expr, isReturnPosition)
 
         case (vd @ ValDef(name, tpt, Some(rhs))) :: rest =>
-          println(s"[PREPROC] ValDef case: name=$name, rhs=${rhs.show.take(50)}")
           val valType = widenAll(tpt.tpe)
           val ephemeralType = TypeRepr.of[DurableEphemeral].appliedTo(valType)
 
@@ -505,7 +503,6 @@ object DurablePreprocessor:
               // Not a resource - transform the RHS (which will wrap as activity if needed)
               // Use transformTopLevel to process lambdas and nested expressions
               val transformedRhs = transformTopLevel(rhs, isReturnPosition = false)
-              println(s"[PREPROC] ValDef transformed: name=$name, transformedRhs=${transformedRhs.show.take(80)}")
               val transformedVal = ValDef.copy(vd)(name, tpt, Some(transformedRhs))
               val transformedRest = transformBlockStatements(rest, expr, isReturnPosition)
               transformedRest match
@@ -667,16 +664,12 @@ object DurablePreprocessor:
      * @param isReturnPosition if true, don't wrap leaf expressions (they're at return position)
      */
     def transformTopLevel(term: Term, isReturnPosition: Boolean = false): Term =
-      val termStr = term.show.take(100).replace("\n", " ")
-      if termStr.contains("map") || termStr.contains("doubled") then
-        println(s"[PREPROC] transformTopLevel: $termStr, isReturnPosition=$isReturnPosition")
       term match
         // Lambda - if body contains await, transform the body recursively
         // Lambdas appear as Block(List(defDef), closure) in the AST
         // Must come before general Block case
         case block @ Block(List(defDef: DefDef), closure: Closure) =>
           val hasAwait = containsAwait(defDef.rhs.getOrElse(term))
-          println(s"[PREPROC] Lambda case: defDef.name=${defDef.name}, hasRhs=${defDef.rhs.isDefined}, containsAwait=$hasAwait")
           if hasAwait then
             // Transform the def body, then reconstruct the block
             val transformedRhs = defDef.rhs.map(rhs => transformTopLevel(rhs, isReturnPosition = true))
@@ -687,7 +680,6 @@ object DurablePreprocessor:
 
         // Block - transform using transformBlockStatements for proper resource handling
         case block @ Block(stats, expr) =>
-          println(s"[PREPROC] Block case matched: stats.size=${stats.size}, expr=${expr.show.take(50)}")
           transformBlockStatements(stats, expr, isReturnPosition)
 
         // If expression - wrap condition, branches inherit return position
@@ -747,7 +739,6 @@ object DurablePreprocessor:
         case app @ Apply(fn, args) =>
           val anyArgHasAwait = args.exists(containsAwait)
           val fnHasAwait = containsAwait(fn)
-          println(s"[PREPROC] Apply case: fn=${fn.show.take(50)}, args.size=${args.size}, anyArgHasAwait=$anyArgHasAwait, fnHasAwait=$fnHasAwait")
           if anyArgHasAwait || fnHasAwait then
             // Process arguments that contain await
             val processedArgs = args.map { arg =>
