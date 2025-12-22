@@ -18,6 +18,23 @@ private[engine] enum StackFrame:
   case Cont(f: Any => Durable[?])
   /** Try handler - processes both success and failure */
   case TryHandler(f: Try[Any] => Durable[?])
+  /** Cached continuation - caches f(a) result at given index */
+  case ContCached[S <: DurableStorageBackend](
+    f: Any => Durable[?],
+    index: Int,
+    storage: DurableStorage[?, S]
+  )
+  /** Cached try handler - caches f(Try(a)) result at given index */
+  case TryHandlerCached[S <: DurableStorageBackend](
+    f: Try[Any] => Durable[?],
+    index: Int,
+    storage: DurableStorage[?, S]
+  )
+  /** Cache result frame - caches the value when continuation completes */
+  case CacheResult[S <: DurableStorageBackend](
+    index: Int,
+    storage: DurableStorage[?, S]
+  )
 
 /**
  * Interpreter for Durable Free Monad.
@@ -109,11 +126,21 @@ object WorkflowSessionRunner:
       case Durable.FlatMapTry(fa, f) =>
         stepsUntilSuspend(fa, ctx, state, StackFrame.TryHandler(f.asInstanceOf[Try[Any] => Durable[?]]) :: stack)
 
+      case fmc: Durable.FlatMapCached[a, b, s] =>
+        handleFlatMapCached[A, a, b, s](fmc, ctx, state, stack)
+
+      case fmtc: Durable.FlatMapTryCached[a, b, s] =>
+        handleFlatMapTryCached[A, a, b, s](fmtc, ctx, state, stack)
+
       case Durable.Error(error) =>
         continueWith(Failure(error), ctx, state, stack)
 
-      case Durable.LocalComputation(compute) =>
-        handleLocalComputation(compute.asInstanceOf[RunContext => Any], ctx, state, stack)
+      case localComp: Durable.LocalComputation[a, s] =>
+        localComp.storage match
+          case Some(storage) =>
+            handleCachedLocalComputation[A, a, s](localComp.compute, storage, localComp.sourcePos, ctx, state, stack)
+          case None =>
+            handleLocalComputation(localComp.compute.asInstanceOf[RunContext => Any], ctx, state, stack)
 
       case activity: Durable.Activity[b, s] =>
         handleActivity[A, b, s](activity, ctx, state, stack)
@@ -189,6 +216,65 @@ object WorkflowSessionRunner:
           case NonFatal(e) =>
             continueWith(Failure(e), ctx, state, rest)
 
+      // Success through cached continuation - run f(value), then cache result
+      case (Success(value), StackFrame.ContCached(f, index, storage) :: rest) =>
+        try
+          val next = f(value)
+          // Push CacheResult frame to cache when f(value) completes
+          stepsUntilSuspend(next, ctx, state, StackFrame.CacheResult(index, storage) :: rest)
+        catch
+          case NonFatal(e) =>
+            continueWith(Failure(e), ctx, state, rest)
+
+      // Success through cached try handler - run f(Success(value)), then cache result
+      case (Success(value), StackFrame.TryHandlerCached(f, index, storage) :: rest) =>
+        try
+          val next = f(Success(value))
+          stepsUntilSuspend(next, ctx, state, StackFrame.CacheResult(index, storage) :: rest)
+        catch
+          case NonFatal(e) =>
+            continueWith(Failure(e), ctx, state, rest)
+
+      // Error skips cached continuation (unwinding) - but still need to handle caching failure
+      case (Failure(error), StackFrame.ContCached(_, index, storage) :: rest) =>
+        // Cache the failure, then continue unwinding
+        storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+          .storeStepFailure(ctx.backend, ctx.workflowId, index, StoredFailure.fromThrowable(error))
+          .flatMap { _ =>
+            continueWith(Failure(error), ctx, state, rest)
+          }.recoverWith { case e =>
+            continueWith(Failure(e), ctx, state, rest)
+          }
+
+      // Error caught by cached try handler - run f(Failure(error)), then cache result
+      case (Failure(error), StackFrame.TryHandlerCached(f, index, storage) :: rest) =>
+        try
+          val next = f(Failure(error))
+          stepsUntilSuspend(next, ctx, state, StackFrame.CacheResult(index, storage) :: rest)
+        catch
+          case NonFatal(e) =>
+            continueWith(Failure(e), ctx, state, rest)
+
+      // CacheResult frame - cache the value and continue
+      case (Success(value), StackFrame.CacheResult(index, storage) :: rest) =>
+        storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+          .storeStep(ctx.backend, ctx.workflowId, index, value)
+          .flatMap { _ =>
+            continueWith(Success(value), ctx, state, rest)
+          }.recoverWith { case e =>
+            continueWith(Failure(e), ctx, state, rest)
+          }
+
+      // CacheResult with failure - cache the failure and continue unwinding
+      case (Failure(error), StackFrame.CacheResult(index, storage) :: rest) =>
+        storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+          .storeStepFailure(ctx.backend, ctx.workflowId, index, StoredFailure.fromThrowable(error))
+          .flatMap { _ =>
+            continueWith(Failure(error), ctx, state, rest)
+          }.recoverWith { case e =>
+            continueWith(Failure(e), ctx, state, rest)
+          }
+
   /**
    * Handle local computation - just execute, no caching.
    */
@@ -204,6 +290,134 @@ object WorkflowSessionRunner:
     catch
       case NonFatal(e) =>
         continueWith(Failure(e), ctx, state, stack)
+
+  /**
+   * Handle cached local computation - assign index, check cache, execute and cache if needed.
+   * Similar to handleActivity but for sync local computations with context access.
+   *
+   * @tparam A Final workflow result type
+   * @tparam B Local computation result type
+   * @tparam S Storage backend type
+   */
+  private def handleCachedLocalComputation[A, B, S <: DurableStorageBackend](
+    compute: RunContext => B,
+    storage: DurableStorage[B, S],
+    sourcePos: durable.runtime.SourcePos,
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+    val backend = ctx.backend.asInstanceOf[S]
+    // Assign index at runtime
+    val index = state.nextIndex()
+
+    // Trace local computation if enabled
+    if ctx.config.traceEnabled then
+      val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
+      println(s"[TRACE] LocalComputation #$index at $sourcePos: $mode")
+
+    if state.isReplayingAt(index) then
+      // Replaying - retrieve from cache (success or failure)
+      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
+        case Some(Right(cached)) =>
+          // Cached success
+          continueWith(Success(cached), ctx, state, stack)
+        case Some(Left(storedFailure)) =>
+          // Cached failure - replay as ReplayedException
+          continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
+        case None =>
+          // Should not happen during replay - missing cached result
+          continueWith(Failure(RuntimeException(
+            s"Missing cached result for local computation at index=$index during replay"
+          )), ctx, state, stack)
+      }
+    else
+      // Not replaying - execute and cache
+      try
+        val result = compute(ctx)
+        storage.storeStep(backend, ctx.workflowId, index, result).flatMap { _ =>
+          continueWith(Success(result), ctx, state, stack)
+        }
+      catch
+        case NonFatal(e) =>
+          // Store the failure for deterministic replay
+          storage.storeStepFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)).flatMap { _ =>
+            continueWith(Failure(e), ctx, state, stack)
+          }
+
+  /**
+   * Handle FlatMapCached - assign index, check cache, skip inner computation if cached.
+   * On replay: if cached, returns cached result without executing fa or f
+   * On first run: pushes ContCached frame and continues with fa
+   */
+  private def handleFlatMapCached[A, X, B, S <: DurableStorageBackend](
+    fmc: Durable.FlatMapCached[X, B, S],
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+    val storage = fmc.storage
+    val backend = ctx.backend.asInstanceOf[S]
+    val index = state.nextIndex()
+
+    if ctx.config.traceEnabled then
+      val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
+      println(s"[TRACE] FlatMapCached #$index at ${fmc.sourcePos}: $mode")
+
+    if state.isReplayingAt(index) then
+      // Short-circuit! Get cached result without executing fa or f
+      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
+        case Some(Right(cached)) =>
+          continueWith(Success(cached), ctx, state, stack)
+        case Some(Left(storedFailure)) =>
+          continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
+        case None =>
+          continueWith(Failure(RuntimeException(
+            s"Missing cached result for FlatMapCached at index=$index during replay"
+          )), ctx, state, stack)
+      }.recoverWith { case e =>
+        continueWith(Failure(e), ctx, state, stack)
+      }
+    else
+      // First run: push ContCached frame to cache f(a) result, continue with fa
+      stepsUntilSuspend(fmc.fa, ctx, state,
+        StackFrame.ContCached(fmc.f.asInstanceOf[Any => Durable[?]], index, storage) :: stack)
+
+  /**
+   * Handle FlatMapTryCached - like FlatMapCached but handles both success and failure of fa.
+   */
+  private def handleFlatMapTryCached[A, X, B, S <: DurableStorageBackend](
+    fmtc: Durable.FlatMapTryCached[X, B, S],
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+    val storage = fmtc.storage
+    val backend = ctx.backend.asInstanceOf[S]
+    val index = state.nextIndex()
+
+    if ctx.config.traceEnabled then
+      val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
+      println(s"[TRACE] FlatMapTryCached #$index at ${fmtc.sourcePos}: $mode")
+
+    if state.isReplayingAt(index) then
+      // Short-circuit! Get cached result without executing fa or f
+      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
+        case Some(Right(cached)) =>
+          continueWith(Success(cached), ctx, state, stack)
+        case Some(Left(storedFailure)) =>
+          continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
+        case None =>
+          continueWith(Failure(RuntimeException(
+            s"Missing cached result for FlatMapTryCached at index=$index during replay"
+          )), ctx, state, stack)
+      }.recoverWith { case e =>
+        continueWith(Failure(e), ctx, state, stack)
+      }
+    else
+      // First run: push TryHandlerCached frame to cache f(Try(a)) result, continue with fa
+      stepsUntilSuspend(fmtc.fa, ctx, state,
+        StackFrame.TryHandlerCached(fmtc.f.asInstanceOf[Try[Any] => Durable[?]], index, storage) :: stack)
 
   /**
    * Handle Activity - assign index, check cache, execute if needed with retry, cache result.
@@ -226,6 +440,11 @@ object WorkflowSessionRunner:
     val backend = ctx.backend.asInstanceOf[S]
     // Assign index at runtime
     val index = state.nextIndex()
+
+    // Trace activity execution if enabled
+    if ctx.config.traceEnabled then
+      val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
+      println(s"[TRACE] Activity #$index at ${activity.sourcePos}: $mode")
 
     if state.isReplayingAt(index) then
       // Replaying - retrieve from cache (success or failure)
@@ -517,7 +736,8 @@ object WorkflowSessionRunner:
    */
   case class RunConfig(
     retryLogger: RetryLogger = RetryLogger.noop,
-    scheduler: Scheduler = Scheduler.default
+    scheduler: Scheduler = Scheduler.default,
+    traceEnabled: Boolean = false
   )
 
   object RunConfig:

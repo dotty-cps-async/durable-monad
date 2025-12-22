@@ -21,10 +21,10 @@ class PreprocessorExternalPackageTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("external-package-test"))
 
-    var computeCount = 0
+    val computeCount = TestCounter()
     val workflow = async[Durable] {
       val x = {
-        computeCount += 1
+        computeCount.increment()
         42
       }
       x + 1
@@ -33,15 +33,15 @@ class PreprocessorExternalPackageTest extends FunSuite:
     // First run - should compute
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
-      assertEquals(computeCount, 1)
+      assertEquals(computeCount.get, 1)
 
       // Second run - should replay from cache (preprocessor wrapped val as activity)
       // Resume from index 1 (after the first activity)
-      computeCount = 0
+      computeCount.reset()
       val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("external-package-test"), 1)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(ctx.workflowId, 43))
-        assertEquals(computeCount, 0, "Should not recompute on replay - preprocessor should have wrapped val as activity")
+        assertEquals(computeCount.get, 0, "Should not recompute on replay - preprocessor should have wrapped val as activity")
       }
     }.flatten
   }

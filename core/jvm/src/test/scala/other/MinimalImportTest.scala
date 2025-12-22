@@ -8,6 +8,7 @@ import cps.*
 import durable.Durable
 import durable.MemoryBackingStore
 import durable.WorkflowId
+import durable.TestCounter
 import durable.engine.WorkflowSessionRunner
 import durable.engine.WorkflowSessionRunner.RunContext
 import durable.engine.WorkflowSessionResult
@@ -25,10 +26,10 @@ class MinimalImportTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("minimal-import-test"))
 
-    var computeCount = 0
+    val computeCount = TestCounter()
     val workflow = async[Durable] {
       val x = {
-        computeCount += 1
+        computeCount.increment()
         42
       }
       x + 1
@@ -37,7 +38,7 @@ class MinimalImportTest extends FunSuite:
     // First run - should compute and cache
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
-      assertEquals(computeCount, 1)
+      assertEquals(computeCount.get, 1)
       // Verify preprocessor cached the val as activity
       assert(backing.size > 0, "Preprocessor should create activities")
     }

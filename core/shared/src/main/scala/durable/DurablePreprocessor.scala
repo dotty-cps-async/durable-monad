@@ -18,8 +18,8 @@ import cps.*
  *
  * Transformation scope:
  *   - Transforms top-level vals and control flow
- *   - DOES NOT transform inside lambdas (x => ...) - treated as atomic
- *   - DOES NOT transform inside nested defs - treated as atomic
+ *   - Transforms lambda bodies (x => ...) if they contain await calls
+ *   - Does NOT transform nested def bodies (dotty-cps-async doesn't handle await in named defs)
  *
  * First resolves DurableStorageBackend from scope to get the backend type S,
  * then resolves DurableStorage[A, S] for each activity. This ensures all
@@ -52,6 +52,7 @@ object DurablePreprocessor:
 
     // Get the symbol for durableFormalConversion for direct comparison
     val durableFormalConversionSymbol = Symbol.requiredMethod("durable.Durable.durableFormalConversion")
+
 
     /**
      * TreeMap to transform F[T].await for types convertible to Future.
@@ -171,10 +172,20 @@ object DurablePreprocessor:
           (meth: Symbol, params: List[Tree]) => toFutureCall.changeOwner(meth)
         )
 
-        // Build: Durable.Activity[T, S](() => ..., storage, noRetryPolicy)
+        // Build SourcePos from effectExpr position
+        val pos = effectExpr.pos
+        val fileName = Literal(StringConstant(pos.sourceFile.name))
+        val lineNum = Literal(IntConstant(pos.startLine + 1))  // 1-based
+        val sourcePosModule = Symbol.requiredModule("durable.runtime.SourcePos")
+        val sourcePos = Apply(
+          Select(Ref(sourcePosModule), sourcePosModule.methodMember("apply").head),
+          List(fileName, lineNum)
+        )
+
+        // Build: Durable.Activity[T, S](() => ..., storage, noRetryPolicy, sourcePos)
         val activityClass = Symbol.requiredClass("durable.Durable.Activity")
 
-        // Activity case class takes: compute: () => Future[A], storage: DurableStorage[A, S], retryPolicy: RetryPolicy
+        // Activity case class takes: compute: () => Future[A], storage: DurableStorage[A, S], retryPolicy: RetryPolicy, sourcePos: SourcePos
         val activityCall = Apply(
           TypeApply(
             Ref(activityClass.companionModule).select(activityClass.companionModule.methodMember("apply").head),
@@ -183,7 +194,7 @@ object DurablePreprocessor:
               TypeTree.of(using backendType.asType)
             )
           ),
-          List(lambda, storage, noRetryPolicy)
+          List(lambda, storage, noRetryPolicy, sourcePos)
         )
 
         // Wrap with await[Durable, T, Durable](activityCall)(using ctx, identityConversion)
@@ -201,7 +212,7 @@ object DurablePreprocessor:
         val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
         Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
 
-    // Apply FutureConvertibleAwaitTransformer first to transform all F[_].await calls
+    // Apply FutureConvertibleAwaitTransformer to transform all F[_].await calls
     val futureTransformer = new FutureConvertibleAwaitTransformer
     val bodyAfterFutureTransform = futureTransformer.transformTerm(body.asTerm)(Symbol.spliceOwner)
 
@@ -212,6 +223,30 @@ object DurablePreprocessor:
         val r = widenAll(right)
         if l =:= r then l else OrType(l, r)
       case other => other.widen
+
+    /**
+     * Check if a term contains any await calls.
+     * Used to decide whether to recursively transform lambda bodies and arguments.
+     */
+    def containsAwait(term: Term): Boolean =
+      var found = false
+      val traverser = new TreeTraverser:
+        override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+          if !found then
+            tree match
+              // await function call: Apply(Apply(TypeApply(await, types), List(expr)), List(ctx, conv))
+              case Apply(Apply(TypeApply(fn, _), _), _) if fn.symbol == awaitSymbol =>
+                found = true
+              // .await extension method: Apply(Select(expr, "await"), args)
+              case Apply(Select(_, "await"), _) =>
+                found = true
+              // Also check for Apply(Apply(Select(...), ...), ...) form of .await
+              case Apply(Apply(sel @ Select(_, "await"), _), _) =>
+                found = true
+              case _ =>
+                super.traverseTree(tree)(owner)
+      traverser.traverseTree(term)(Symbol.spliceOwner)
+      found
 
     def wrapWithActivity(expr: Term): Term =
       val exprType = widenAll(expr.tpe)
@@ -233,7 +268,7 @@ object DurablePreprocessor:
           wrapWithActivitySync(expr, exprType)
 
     def wrapWithActivitySync(expr: Term, exprType: TypeRepr): Term =
-      // Build: ctx.activitySync[A, S](expr, RetryPolicy.default)
+      // Build: ctx.activitySync[A, S](expr, RetryPolicy.default, sourcePos)
       // where S is the DurableStorageBackend type resolved earlier
       // DurableStorage[A, S] is resolved via normal given resolution
       // We use RetryPolicy.default for preprocessor-generated activities
@@ -243,7 +278,17 @@ object DurablePreprocessor:
       val retryPolicyModule = Symbol.requiredModule("durable.RetryPolicy")
       val defaultPolicy = Select(Ref(retryPolicyModule), retryPolicyModule.fieldMember("default"))
 
-      // Build: ctx.activitySync[A, S](expr, RetryPolicy.default)
+      // Build SourcePos from expr position
+      val pos = expr.pos
+      val fileName = Literal(StringConstant(pos.sourceFile.name))
+      val lineNum = Literal(IntConstant(pos.startLine + 1))  // 1-based
+      val sourcePosModule = Symbol.requiredModule("durable.runtime.SourcePos")
+      val sourcePos = Apply(
+        Select(Ref(sourcePosModule), sourcePosModule.methodMember("apply").head),
+        List(fileName, lineNum)
+      )
+
+      // Build: ctx.activitySync[A, S](expr, RetryPolicy.default, sourcePos)
       val activityCall = Apply(
         TypeApply(
           Select.unique(ctx.asTerm, "activitySync"),
@@ -252,7 +297,7 @@ object DurablePreprocessor:
             TypeTree.of(using backendType.asType)
           )
         ),
-        List(expr, defaultPolicy)
+        List(expr, defaultPolicy, sourcePos)
       )
 
       // Build: await[Durable, T, Durable](activityCall)(using ctx, identityConversion)
@@ -314,6 +359,18 @@ object DurablePreprocessor:
       Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
 
     /**
+     * Substitute all references to oldSymbol with references to newSymbol in a term.
+     */
+    def substituteSymbol(term: Term, oldSymbol: Symbol, newSymbol: Symbol): Term =
+      val mapper = new TreeMap:
+        override def transformTerm(t: Term)(owner: Symbol): Term = t match
+          case ident: Ident if ident.symbol == oldSymbol =>
+            Ref(newSymbol)
+          case _ =>
+            super.transformTerm(t)(owner)
+      mapper.transformTerm(term)(Symbol.spliceOwner)
+
+    /**
      * Transform a catch case pattern to also match ReplayedException.
      *
      * Transforms: case e: SomeException => body
@@ -334,14 +391,24 @@ object DurablePreprocessor:
           val wildcardReplayed = Typed(Wildcard(), TypeTree.of[ReplayedException])
           val alternativePattern = Alternatives(List(wildcardOriginal, wildcardReplayed))
 
+          // Create a NEW symbol with Throwable type to handle both exception types
+          // The original symbol has the specific exception type which causes ClassCastException
+          val newSymbol = Symbol.newVal(
+            Symbol.spliceOwner,
+            bind.symbol.name,
+            TypeRepr.of[Throwable],
+            Flags.EmptyFlags,
+            Symbol.noSymbol
+          )
+
           // Build: e @ (_: SomeException | _: ReplayedException)
-          val newPattern = Bind(bind.symbol, alternativePattern)
+          val newPattern = Bind(newSymbol, alternativePattern)
 
           // Build guard: ReplayedException.matches[SomeException](e)
           val replayedModule = Ref(Symbol.requiredModule("durable.ReplayedException"))
           val matchesMethod = Select(replayedModule, replayedModule.symbol.methodMember("matches").head)
           val matchesTyped = TypeApply(matchesMethod, List(TypeTree.of(using exceptionType.asType)))
-          val boundVar = Ref(bind.symbol)
+          val boundVar = Ref(newSymbol)
           val guardExpr = Apply(matchesTyped, List(boundVar))
 
           // Combine with existing guard if present
@@ -353,7 +420,11 @@ object DurablePreprocessor:
             case None =>
               Some(guardExpr)
 
-          CaseDef(newPattern, combinedGuard, transformTopLevel(caseDef.rhs, isReturnPosition))
+          // Transform the RHS, substituting the old symbol with the new one
+          val transformedRhs = transformTopLevel(caseDef.rhs, isReturnPosition)
+          val substitutedRhs = substituteSymbol(transformedRhs, bind.symbol, newSymbol)
+
+          CaseDef(newPattern, combinedGuard, substitutedRhs)
 
         // Pattern: _: SomeException (Typed without Bind)
         case typed @ Typed(Wildcard(), tpt) if isThrowableType(tpt.tpe) =>
@@ -415,11 +486,13 @@ object DurablePreprocessor:
      * When a val has WorkflowSessionResource[T], wraps the rest of the block in WithSessionResource.
      */
     def transformBlockStatements(stats: List[Statement], expr: Term, isReturnPosition: Boolean): Term =
+      println(s"[PREPROC] transformBlockStatements: stats.size=${stats.size}, expr=${expr.show.take(50)}, isReturnPosition=$isReturnPosition")
       stats match
         case Nil =>
           transformTopLevel(expr, isReturnPosition)
 
         case (vd @ ValDef(name, tpt, Some(rhs))) :: rest =>
+          println(s"[PREPROC] ValDef case: name=$name, rhs=${rhs.show.take(50)}")
           val valType = widenAll(tpt.tpe)
           val ephemeralType = TypeRepr.of[DurableEphemeral].appliedTo(valType)
 
@@ -429,9 +502,11 @@ object DurablePreprocessor:
               wrapWithEphemeralResource(vd, rhs, rest, expr, valType, iss.tree, isReturnPosition)
 
             case _ =>
-              // Not a resource - normal activity wrapping, then continue
-              val wrappedRhs = wrapWithActivity(rhs)
-              val transformedVal = ValDef.copy(vd)(name, tpt, Some(wrappedRhs))
+              // Not a resource - transform the RHS (which will wrap as activity if needed)
+              // Use transformTopLevel to process lambdas and nested expressions
+              val transformedRhs = transformTopLevel(rhs, isReturnPosition = false)
+              println(s"[PREPROC] ValDef transformed: name=$name, transformedRhs=${transformedRhs.show.take(80)}")
+              val transformedVal = ValDef.copy(vd)(name, tpt, Some(transformedRhs))
               val transformedRest = transformBlockStatements(rest, expr, isReturnPosition)
               transformedRest match
                 case Block(restStats, restExpr) =>
@@ -440,7 +515,11 @@ object DurablePreprocessor:
                   Block(List(transformedVal), transformedRest)
 
         case (defDef: DefDef) :: rest =>
-          // Def definition - don't transform, just include
+          // Named def definitions are NOT transformed here.
+          // Note: Lambdas (Block(List(defDef), Closure)) are handled separately
+          // in transformTopLevel before reaching here.
+          // Standalone named defs cannot use await inside - dotty-cps-async
+          // doesn't handle await inside nested named functions.
           val transformedRest = transformBlockStatements(rest, expr, isReturnPosition)
           transformedRest match
             case Block(restStats, restExpr) =>
@@ -563,10 +642,10 @@ object DurablePreprocessor:
      */
     def transformStatement(stat: Statement): Statement =
       stat match
-        // Val definition - wrap RHS with activity
+        // Val definition - transform RHS (which will wrap as activity if needed)
         case vd @ ValDef(name, tpt, Some(rhs)) =>
-          val wrappedRhs = wrapWithActivity(rhs)
-          ValDef.copy(vd)(name, tpt, Some(wrappedRhs))
+          val transformedRhs = transformTopLevel(rhs, isReturnPosition = false)
+          ValDef.copy(vd)(name, tpt, Some(transformedRhs))
 
         // Def definition - don't transform
         case defDef: DefDef =>
@@ -588,9 +667,27 @@ object DurablePreprocessor:
      * @param isReturnPosition if true, don't wrap leaf expressions (they're at return position)
      */
     def transformTopLevel(term: Term, isReturnPosition: Boolean = false): Term =
+      val termStr = term.show.take(100).replace("\n", " ")
+      if termStr.contains("map") || termStr.contains("doubled") then
+        println(s"[PREPROC] transformTopLevel: $termStr, isReturnPosition=$isReturnPosition")
       term match
+        // Lambda - if body contains await, transform the body recursively
+        // Lambdas appear as Block(List(defDef), closure) in the AST
+        // Must come before general Block case
+        case block @ Block(List(defDef: DefDef), closure: Closure) =>
+          val hasAwait = containsAwait(defDef.rhs.getOrElse(term))
+          println(s"[PREPROC] Lambda case: defDef.name=${defDef.name}, hasRhs=${defDef.rhs.isDefined}, containsAwait=$hasAwait")
+          if hasAwait then
+            // Transform the def body, then reconstruct the block
+            val transformedRhs = defDef.rhs.map(rhs => transformTopLevel(rhs, isReturnPosition = true))
+            val newDefDef = DefDef.copy(defDef)(defDef.name, defDef.paramss, defDef.returnTpt, transformedRhs)
+            Block(List(newDefDef), closure)
+          else
+            term  // No await, leave as-is
+
         // Block - transform using transformBlockStatements for proper resource handling
         case block @ Block(stats, expr) =>
+          println(s"[PREPROC] Block case matched: stats.size=${stats.size}, expr=${expr.show.take(50)}")
           transformBlockStatements(stats, expr, isReturnPosition)
 
         // If expression - wrap condition, branches inherit return position
@@ -642,12 +739,47 @@ object DurablePreprocessor:
         case _: Literal | _: Ident =>
           term
 
-        // Select, Apply, TypeApply - wrap unless at return position or already an await call
+        // Already an await call, don't double-wrap
         case app @ Apply(Apply(TypeApply(fn, _), _), _) if fn.symbol == awaitSymbol =>
-          term  // Already an await call, don't double-wrap
+          term
 
-        case _: Select | _: Apply | _: TypeApply =>
-          if isReturnPosition then term  // At return position, don't wrap
+        // Apply - check if arguments contain await, process those recursively
+        case app @ Apply(fn, args) =>
+          val anyArgHasAwait = args.exists(containsAwait)
+          val fnHasAwait = containsAwait(fn)
+          println(s"[PREPROC] Apply case: fn=${fn.show.take(50)}, args.size=${args.size}, anyArgHasAwait=$anyArgHasAwait, fnHasAwait=$fnHasAwait")
+          if anyArgHasAwait || fnHasAwait then
+            // Process arguments that contain await
+            val processedArgs = args.map { arg =>
+              if containsAwait(arg) then transformTopLevel(arg, isReturnPosition = false)
+              else arg
+            }
+            // Process fn if it contains await
+            val processedFn = if fnHasAwait then transformTopLevel(fn, isReturnPosition = false) else fn
+            val processedApp = Apply.copy(app)(processedFn, processedArgs)
+            if isReturnPosition then processedApp
+            else wrapWithActivity(processedApp)
+          else if isReturnPosition then term
+          else wrapWithActivity(term)
+
+        // Select - check if qualifier contains await
+        case sel @ Select(qualifier, name) =>
+          if containsAwait(qualifier) then
+            val processedQualifier = transformTopLevel(qualifier, isReturnPosition = false)
+            val processedSel = Select.copy(sel)(processedQualifier, name)
+            if isReturnPosition then processedSel
+            else wrapWithActivity(processedSel)
+          else if isReturnPosition then term
+          else wrapWithActivity(term)
+
+        // TypeApply - check if fn contains await
+        case typeApp @ TypeApply(fn, typeArgs) =>
+          if containsAwait(fn) then
+            val processedFn = transformTopLevel(fn, isReturnPosition = false)
+            val processedTypeApp = TypeApply.copy(typeApp)(processedFn, typeArgs)
+            if isReturnPosition then processedTypeApp
+            else wrapWithActivity(processedTypeApp)
+          else if isReturnPosition then term
           else wrapWithActivity(term)
 
         // Assignment to var - not allowed in durable workflows (breaks replay semantics)

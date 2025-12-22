@@ -148,18 +148,19 @@ class AsyncActivityTest extends FunSuite:
     val workflowId = WorkflowId("sync-fallback")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var callCount = 0
+    val callCount = TestCounter()
 
     val workflow = async[Durable] {
       // Option[Int] should use activitySync (no DurableAsyncWrapper[Option])
-      val optResult: Option[Int] = { callCount += 1; Some(42) }
+      val optResult: Option[Int] = { callCount.increment(); Some(42) }
       optResult.getOrElse(0)
     }
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(callCount, 1)
-      assertEquals(backing.size, 1) // Option[Int] was cached via activitySync
+      assertEquals(callCount.get, 1)
+      // Both the Unit from increment() and the Option[Int] are cached
+      assertEquals(backing.size, 2)
     }
   }
 
@@ -168,13 +169,13 @@ class AsyncActivityTest extends FunSuite:
     val workflowId = WorkflowId("mixed")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var syncCount = 0
-    var asyncCount = 0
+    val syncCount = TestCounter()
+    val asyncCount = TestCounter()
 
     val workflow = async[Durable] {
-      val syncVal = { syncCount += 1; 10 }
-      val asyncVal: Future[Int] = { asyncCount += 1; Future.successful(20) }
-      val anotherSync = { syncCount += 1; 12 }
+      val syncVal = { syncCount.increment(); 10 }
+      val asyncVal: Future[Int] = { asyncCount.increment(); Future.successful(20) }
+      val anotherSync = { syncCount.increment(); 12 }
       // Return tuple of sync values and the Future
       (syncVal, asyncVal, anotherSync)
     }
@@ -183,9 +184,10 @@ class AsyncActivityTest extends FunSuite:
       case WorkflowSessionResult.Completed(_, (s1, futureVal, s2)) =>
         futureVal.map { asyncResult =>
           assertEquals(s1 + asyncResult + s2, 42)
-          assertEquals(syncCount, 2)
-          assertEquals(asyncCount, 1)
-          assertEquals(backing.size, 3) // 2 sync + 1 async
+          assertEquals(syncCount.get, 2)
+          assertEquals(asyncCount.get, 1)
+          // 3 val blocks wrapped + 1 tuple expression = 4 activities
+          assertEquals(backing.size, 4)
         }
       case other => fail(s"Expected Completed, got $other")
     }

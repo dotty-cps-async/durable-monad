@@ -4,7 +4,7 @@ import scala.concurrent.{Future, ExecutionContext}
 import munit.FunSuite
 import cps.*
 
-import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
+import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowSessionResult}
 
 /**
  * Tests for DurablePreprocessor - verifies that async blocks
@@ -21,10 +21,10 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-1")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var computeCount = 0
+    val computeCount = TestCounter()
     val workflow = async[Durable] {
       val x = {
-        computeCount += 1
+        computeCount.increment()
         42
       }
       x
@@ -32,7 +32,7 @@ class DurablePreprocessorTest extends FunSuite:
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(computeCount, 1)
+      assertEquals(computeCount.get, 1)
       assertEquals(backing.size, 1) // val was cached
     }
   }
@@ -42,17 +42,17 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-2")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var computeCount = 0
+    val computeCount = TestCounter()
     val workflow = async[Durable] {
-      val a = { computeCount += 1; 10 }
-      val b = { computeCount += 1; 20 }
-      val c = { computeCount += 1; 12 }
+      val a = { computeCount.increment(); 10 }
+      val b = { computeCount.increment(); 20 }
+      val c = { computeCount.increment(); 12 }
       a + b + c
     }
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(computeCount, 3)
+      assertEquals(computeCount.get, 3)
       assertEquals(backing.size, 3) // all vals cached
     }
   }
@@ -62,24 +62,24 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-3")
 
     // First run - compute and cache
-    var computeCount = 0
+    val computeCount = TestCounter()
     val workflow = async[Durable] {
-      val a = { computeCount += 1; 10 }
-      val b = { computeCount += 1; 32 }
+      val a = { computeCount.increment(); 10 }
+      val b = { computeCount.increment(); 32 }
       a + b
     }
 
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(computeCount, 2)
+      assertEquals(computeCount.get, 2)
 
       // Second run - replay from cache
-      computeCount = 0
+      computeCount.reset()
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
-        assertEquals(computeCount, 0) // NOT recomputed - from cache
+        assertEquals(computeCount.get, 0) // NOT recomputed - from cache
       }
     }
   }
@@ -89,16 +89,16 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-4")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var condCount = 0
-    var thenCount = 0
-    var elseCount = 0
+    val condCount = TestCounter()
+    val thenCount = TestCounter()
+    val elseCount = TestCounter()
 
     val workflow = async[Durable] {
-      val result = if { condCount += 1; true } then {
-        thenCount += 1
+      val result = if { condCount.increment(); true } then {
+        thenCount.increment()
         42
       } else {
-        elseCount += 1
+        elseCount.increment()
         0
       }
       result
@@ -106,9 +106,9 @@ class DurablePreprocessorTest extends FunSuite:
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(condCount, 1)
-      assertEquals(thenCount, 1)
-      assertEquals(elseCount, 0) // else branch not executed
+      assertEquals(condCount.get, 1)
+      assertEquals(thenCount.get, 1)
+      assertEquals(elseCount.get, 0) // else branch not executed
     }
   }
 
@@ -117,13 +117,13 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-5")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var outerCount = 0
-    var innerCount = 0
+    val outerCount = TestCounter()
+    val innerCount = TestCounter()
 
     val workflow = async[Durable] {
       val outer = {
-        outerCount += 1
-        val inner = { innerCount += 1; 21 }
+        outerCount.increment()
+        val inner = { innerCount.increment(); 21 }
         inner * 2
       }
       outer
@@ -132,8 +132,8 @@ class DurablePreprocessorTest extends FunSuite:
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       // Only outer val is wrapped, inner is part of outer's RHS
-      assertEquals(outerCount, 1)
-      assertEquals(innerCount, 1)
+      assertEquals(outerCount.get, 1)
+      assertEquals(innerCount.get, 1)
     }
   }
 
@@ -142,38 +142,41 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-6")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var scrutineeCount = 0
-    var caseCount = 0
+    val scrutineeCount = TestCounter()
+    val caseCount = TestCounter()
 
     val workflow = async[Durable] {
-      val x = { scrutineeCount += 1; 2 }
+      val x = { scrutineeCount.increment(); 2 }
       val result: Int = x match {
-        case 1 => { caseCount += 1; 10 }
-        case 2 => { caseCount += 1; 42 }
-        case _ => { caseCount += 1; 0 }
+        case 1 => { caseCount.increment(); 10 }
+        case 2 => { caseCount.increment(); 42 }
+        case _ => { caseCount.increment(); 0 }
       }
       result
     }
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(scrutineeCount, 1)
-      assertEquals(caseCount, 1) // only matching case executed
+      assertEquals(scrutineeCount.get, 1)
+      assertEquals(caseCount.get, 1) // only matching case executed
     }
   }
 
   test("preprocessor captures DurableStorage in Activity") {
     given backing: MemoryBackingStore = MemoryBackingStore()
 
+    def computeValue(): Int = 42
+
     // Create a workflow via async - the preprocessor should capture DurableStorage
+    // Note: literals like `42` are not wrapped (deterministic), so we use a function call
     val workflow = async[Durable] {
-      val x = 42
+      val x = computeValue()  // Function call - will be wrapped as Activity
       x
     }
 
     // Verify the Activity node contains a DurableStorage
     workflow match
-      case Durable.FlatMap(Durable.Activity(_, capturedStorage, _), _) =>
+      case Durable.FlatMap(Durable.Activity(_, capturedStorage, _, _), _) =>
         // The captured storage should be a DurableStorage instance
         assert(capturedStorage.isInstanceOf[DurableStorage[?, ?]],
           s"Expected DurableStorage but got ${capturedStorage.getClass.getName}")
@@ -210,21 +213,21 @@ class DurablePreprocessorTest extends FunSuite:
 
     // Simulate non-deterministic condition with a counter
     // First call returns true, subsequent calls would return false
-    var condCallCount = 0
+    val condCallCount = TestCounter()
     def nonDeterministicCondition(): Boolean = {
-      condCallCount += 1
-      condCallCount == 1  // true on first call, false on subsequent
+      condCallCount.increment()
+      condCallCount.get == 1  // true on first call, false on subsequent
     }
 
-    var thenCount = 0
-    var elseCount = 0
+    val thenCount = TestCounter()
+    val elseCount = TestCounter()
 
     val workflow = async[Durable] {
       val result = if (nonDeterministicCondition()) {
-        thenCount += 1
+        thenCount.increment()
         42
       } else {
-        elseCount += 1
+        elseCount.increment()
         0
       }
       result
@@ -234,23 +237,23 @@ class DurablePreprocessorTest extends FunSuite:
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(condCallCount, 1)  // condition evaluated once
-      assertEquals(thenCount, 1)
-      assertEquals(elseCount, 0)
+      assertEquals(condCallCount.get, 1)  // condition evaluated once
+      assertEquals(thenCount.get, 1)
+      assertEquals(elseCount.get, 0)
 
       // Reset counters for replay
-      condCallCount = 0
-      thenCount = 0
-      elseCount = 0
+      condCallCount.reset()
+      thenCount.reset()
+      elseCount.reset()
 
       // Second run (replay) - should use cached condition value (true)
       // even though nonDeterministicCondition() would now return false
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2)  // both condition and result cached
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))  // same result
-        assertEquals(condCallCount, 0)  // condition NOT re-evaluated
-        assertEquals(thenCount, 0)  // then branch NOT re-executed
-        assertEquals(elseCount, 0)  // else branch NOT executed either
+        assertEquals(condCallCount.get, 0)  // condition NOT re-evaluated
+        assertEquals(thenCount.get, 0)  // then branch NOT re-executed
+        assertEquals(elseCount.get, 0)  // else branch NOT executed either
       }
     }
   }
@@ -261,20 +264,20 @@ class DurablePreprocessorTest extends FunSuite:
 
     // Simulate non-deterministic scrutinee with a counter
     // First call returns 1, subsequent calls would return 2
-    var scrutineeCallCount = 0
+    val scrutineeCallCount = TestCounter()
     def nonDeterministicValue(): Int = {
-      scrutineeCallCount += 1
-      if (scrutineeCallCount == 1) 1 else 2
+      scrutineeCallCount.increment()
+      if (scrutineeCallCount.get == 1) 1 else 2
     }
 
-    var case1Count = 0
-    var case2Count = 0
+    val case1Count = TestCounter()
+    val case2Count = TestCounter()
 
     val workflow = async[Durable] {
       val x = nonDeterministicValue()
       val result: Int = x match {
-        case 1 => { case1Count += 1; 42 }
-        case 2 => { case2Count += 1; 0 }
+        case 1 => { case1Count.increment(); 42 }
+        case 2 => { case2Count.increment(); 0 }
         case _ => -1
       }
       result
@@ -284,23 +287,23 @@ class DurablePreprocessorTest extends FunSuite:
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 42))
-      assertEquals(scrutineeCallCount, 1)  // scrutinee evaluated once
-      assertEquals(case1Count, 1)
-      assertEquals(case2Count, 0)
+      assertEquals(scrutineeCallCount.get, 1)  // scrutinee evaluated once
+      assertEquals(case1Count.get, 1)
+      assertEquals(case2Count.get, 0)
 
       // Reset counters for replay
-      scrutineeCallCount = 0
-      case1Count = 0
-      case2Count = 0
+      scrutineeCallCount.reset()
+      case1Count.reset()
+      case2Count.reset()
 
       // Second run (replay) - should use cached scrutinee value (1)
       // even though nonDeterministicValue() would now return 2
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 3)  // x, scrutinee, and result cached
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))  // same result
-        assertEquals(scrutineeCallCount, 0)  // scrutinee NOT re-evaluated
-        assertEquals(case1Count, 0)  // case 1 NOT re-executed
-        assertEquals(case2Count, 0)  // case 2 NOT executed either
+        assertEquals(scrutineeCallCount.get, 0)  // scrutinee NOT re-evaluated
+        assertEquals(case1Count.get, 0)  // case 1 NOT re-executed
+        assertEquals(case2Count.get, 0)  // case 2 NOT executed either
       }
     }
   }
@@ -320,11 +323,11 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-resource-1")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var releaseCount = 0
+    val releaseCount = TestCounter()
 
     // Only release is provided - user's expression is used for acquisition
     given DurableEphemeral[TestResource] = DurableEphemeral(
-      r => { releaseCount += 1; r.release() }
+      r => { releaseCount.increment(); r.release() }
     )
 
     val workflow = async[Durable] {
@@ -335,7 +338,7 @@ class DurablePreprocessorTest extends FunSuite:
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 420))  // 42 * 10 = 420
-      assertEquals(releaseCount, 1)
+      assertEquals(releaseCount.get, 1)
     }
   }
 
@@ -343,16 +346,16 @@ class DurablePreprocessorTest extends FunSuite:
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("preprocess-resource-replay")
 
-    var releaseCount = 0
-    var computeCount = 0
+    val releaseCount = TestCounter()
+    val computeCount = TestCounter()
 
     given DurableEphemeral[TestResource] = DurableEphemeral(
-      r => { releaseCount += 1; r.release() }
+      r => { releaseCount.increment(); r.release() }
     )
 
     val workflow = async[Durable] {
       val resource: TestResource = new TestResource(5)  // User's expression
-      val result = { computeCount += 1; resource.compute(10) }  // Activity - cached
+      val result = { computeCount.increment(); resource.compute(10) }  // Activity - cached
       result
     }
 
@@ -360,19 +363,19 @@ class DurablePreprocessorTest extends FunSuite:
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 50))  // 5 * 10 = 50
-      assertEquals(releaseCount, 1)
-      assertEquals(computeCount, 1)
+      assertEquals(releaseCount.get, 1)
+      assertEquals(computeCount.get, 1)
 
       // Reset counts
-      releaseCount = 0
-      computeCount = 0
+      releaseCount.reset()
+      computeCount.reset()
 
       // Replay - resource created fresh (user expression runs), but activity cached
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)  // 1 cached activity
       WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 50))  // Same cached result
-        assertEquals(releaseCount, 1)  // Resource released
-        assertEquals(computeCount, 0)  // Activity NOT re-executed - cached
+        assertEquals(releaseCount.get, 1)  // Resource released
+        assertEquals(computeCount.get, 0)  // Activity NOT re-executed - cached
       }
     }
   }
@@ -382,10 +385,11 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-resource-nested")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var releaseOrder: List[Int] = Nil
+    // Use a mutable list builder outside the async block - appending via method call
+    val releaseOrderBuilder = scala.collection.mutable.ListBuffer[Int]()
 
     given DurableEphemeral[TestResource] = DurableEphemeral(
-      r => { releaseOrder = releaseOrder :+ r.id; r.release() }
+      r => { releaseOrderBuilder.append(r.id); r.release() }
     )
 
     val workflow = async[Durable] {
@@ -398,7 +402,7 @@ class DurablePreprocessorTest extends FunSuite:
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 10))  // 1 * (2 * 5) = 10
       // Should release in reverse order (inner first)
-      assertEquals(releaseOrder, List(2, 1))
+      assertEquals(releaseOrderBuilder.toList, List(2, 1))
     }
   }
 
@@ -407,10 +411,10 @@ class DurablePreprocessorTest extends FunSuite:
     val workflowId = WorkflowId("preprocess-mixed-vals")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    var releaseCount = 0
+    val releaseCount = TestCounter()
 
     given DurableEphemeral[TestResource] = DurableEphemeral(
-      r => { releaseCount += 1; r.release() }
+      r => { releaseCount.increment(); r.release() }
     )
 
     val workflow = async[Durable] {
@@ -423,7 +427,128 @@ class DurablePreprocessorTest extends FunSuite:
 
     WorkflowSessionRunner.run(workflow, ctx).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 45))  // 3 * (10 + 5) = 45
-      assertEquals(releaseCount, 1)
+      assertEquals(releaseCount.get, 1)
+    }
+  }
+
+  // ============================================================
+  // Tests that localCached properly caches values on replay
+  // ============================================================
+
+  test("Durable.localCached.await should NOT be re-evaluated on replay") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("nondet-local-await")
+
+    // Counter that changes value on each call - simulates non-deterministic source
+    val callCount = TestCounter()
+    def getNonDeterministicValue(): Int = {
+      callCount.increment()
+      callCount.get * 10  // Returns 10, 20, 30, ... on successive calls
+    }
+
+    val workflow = async[Durable] {
+      // localCached ensures the value is cached and replayed
+      val nonDetValue = Durable.localCached { _ => getNonDeterministicValue() }.await
+
+      // This IS cached because it's a regular val (wrapped by preprocessor)
+      val cached = nonDetValue + 5
+
+      cached
+    }
+
+    // First run
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
+    WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 15))  // 10 + 5 = 15
+      assertEquals(callCount.get, 1)
+
+      // DON'T reset callCount - this simulates the counter persisting across runs
+
+      // Replay from index 1 (nonDetValue cached, cached val IS cached)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1)
+      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+        // With localCached, function should NOT be called again on replay
+        assertEquals(callCount.get, 1, "Durable.localCached.await was re-evaluated on replay!")
+        assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 15))
+      }
+    }
+  }
+
+  test("Durable.localCached.await in condition should use cached value on replay") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("nondet-control-flow")
+
+    val callCount = TestCounter()
+    def getNonDeterministicBool(): Boolean = {
+      callCount.increment()
+      callCount.get == 1  // true on first call, false on subsequent
+    }
+
+    val workflow = async[Durable] {
+      // localCached ensures the value is cached
+      val shouldTakeThen = Durable.localCached { _ => getNonDeterministicBool() }.await
+
+      // The if-condition IS cached (preprocessor wraps shouldTakeThen reference)
+      if shouldTakeThen then 42 else 0
+    }
+
+    // First run - shouldTakeThen = true
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
+    WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 42))
+      assertEquals(callCount.get, 1)
+
+      // Replay from index 2 (condition + branch cached)
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 2)
+      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+        // With localCached, function should NOT be called again on replay
+        assertEquals(callCount.get, 1, "Durable.localCached.await was re-evaluated on replay!")
+        assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
+      }
+    }
+  }
+
+  // ============================================================
+  // Tests for lambda with await passed to higher-order functions
+  // ============================================================
+
+  test("lambda with await passed to List.map caches correctly") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("lambda-hof-1")
+
+    // Enable CPS code printing for debugging
+    given cps.macros.flags.PrintCode = cps.macros.flags.PrintCode()
+
+    val computeCounter = TestCounter()
+
+    val workflow = async[Durable] {
+      val items = List(1, 2, 3)
+      // Lambda with await passed to map - body should be transformed
+      val results = items.map { x =>
+        val doubled = { computeCounter.increment(); x * 2 }
+        Durable.pure(doubled).await
+      }
+      results.sum
+    }
+
+    // First run with tracing enabled
+    val traceConfig = WorkflowSessionRunner.RunConfig(traceEnabled = true)
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId, traceConfig, ConfigSource.empty)
+    WorkflowSessionRunner.run(workflow, ctx1).flatMap { result1 =>
+      assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 12))  // (1*2) + (2*2) + (3*2) = 12
+      assertEquals(computeCounter.get, 3)  // computed for each item
+
+      println(s"After first run: backing.size = ${backing.size}")
+
+      // Replay - all vals should be cached
+      computeCounter.reset()
+      val numCached = backing.size
+      val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, numCached, traceConfig, ConfigSource.empty)
+      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+        println(s"After replay: computeCount = ${computeCounter.get}")
+        assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 12))
+        assertEquals(computeCounter.get, 0)  // NOT recomputed - from cache
+      }
     }
   }
 

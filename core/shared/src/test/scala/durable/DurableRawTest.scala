@@ -122,7 +122,7 @@ class DurableRawTest extends FunSuite:
     assertEquals(computed, false)
 
     dr.toDurable match
-      case Durable.Activity(_, _, _) => ()
+      case Durable.Activity(_, _, _, _) => ()
       case _ => fail("Expected Activity")
   }
 
@@ -130,7 +130,7 @@ class DurableRawTest extends FunSuite:
     val dr = DurableRaw.local { ctx => ctx.workflowId.value }
 
     dr.toDurable match
-      case Durable.LocalComputation(_) => ()
+      case Durable.LocalComputation(_, _, _) => ()
       case _ => fail("Expected LocalComputation")
   }
 
@@ -139,10 +139,10 @@ class DurableRawTest extends FunSuite:
     {
       given backing: MemoryBackingStore = MemoryBackingStore()
 
-      var durableCount = 0
+      val durableCount = TestCounter()
       val workflowWithPreprocessor = async[Durable] {
         val x = {
-          durableCount += 1
+          durableCount.increment()
           42
         }
         x
@@ -163,7 +163,7 @@ class DurableRawTest extends FunSuite:
       var rawCount = 0
       val workflowRaw: Durable[Int] = async[DurableRaw] {
         val x = {
-          rawCount += 1
+          rawCount += 1  // This is DurableRaw - no preprocessor, so assignment is OK
           42
         }
         x

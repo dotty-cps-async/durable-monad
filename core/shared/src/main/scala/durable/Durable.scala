@@ -7,6 +7,7 @@ import java.time.Instant
 import cps.*
 import com.github.rssh.appcontext.*
 import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowMetadata}
+import durable.runtime.SourcePos
 
 /**
  * Durable[A] - A Monad describing a durable computation.
@@ -39,8 +40,19 @@ enum Durable[A]:
   /** Error */
   case Error(error: Throwable)
 
-  /** Local computation - sync, deterministic, no caching needed. Has access to context. */
-  case LocalComputation(compute: WorkflowSessionRunner.RunContext => A)
+  /**
+   * Local computation - sync, has access to context.
+   * Caching behavior depends on whether storage is provided:
+   *   - None: no caching, executed fresh on each run/resume (for deterministic context access)
+   *   - Some(storage): cached as activity, assigned index, replayed on resume
+   *
+   * The preprocessor checks val types and supplies storage when DurableStorage exists.
+   */
+  case LocalComputation[A, S <: DurableStorageBackend](
+    compute: WorkflowSessionRunner.RunContext => A,
+    storage: Option[DurableStorage[A, S]] = None,
+    sourcePos: SourcePos = SourcePos.unknown
+  ) extends Durable[A]
 
   /**
    * Activity (outbound operation).
@@ -58,7 +70,8 @@ enum Durable[A]:
   case Activity[A, S <: DurableStorageBackend](
     compute: () => Future[A],
     storage: DurableStorage[A, S],
-    retryPolicy: RetryPolicy
+    retryPolicy: RetryPolicy,
+    sourcePos: SourcePos = SourcePos.unknown
   ) extends Durable[A]
 
   /**
@@ -72,6 +85,32 @@ enum Durable[A]:
 
   /** Try/catch semantics - handles both success and failure of fa */
   case FlatMapTry[A, B](fa: Durable[A], f: Try[A] => Durable[B]) extends Durable[B]
+
+  /**
+   * Cached flatMap - caches the result of f(a) to skip inner activities on replay.
+   *
+   * On first run: executes fa, then f(a), caches final result B
+   * On replay: if cached, returns cached B without executing fa or f
+   *
+   * Used by activitySync_async to cache HOF results (e.g., List.map with await in lambda).
+   */
+  case FlatMapCached[A, B, S <: DurableStorageBackend](
+    fa: Durable[A],
+    f: A => Durable[B],
+    storage: DurableStorage[B, S],
+    sourcePos: SourcePos = SourcePos.unknown
+  ) extends Durable[B]
+
+  /**
+   * Cached flatMapTry - caches the result of f(tryA) to skip inner activities on replay.
+   * Like FlatMapCached but handles both success and failure of fa.
+   */
+  case FlatMapTryCached[A, B, S <: DurableStorageBackend](
+    fa: Durable[A],
+    f: Try[A] => Durable[B],
+    storage: DurableStorage[B, S],
+    sourcePos: SourcePos = SourcePos.unknown
+  ) extends Durable[B]
 
   /**
    * Continue as a new workflow - clears storage and restarts with new args.
@@ -150,9 +189,24 @@ object Durable:
   def failed[A](e: Throwable): Durable[A] =
     Error(e)
 
-  /** Local computation - sync, deterministic, no caching */
-  def local[A](compute: WorkflowSessionRunner.RunContext => A): Durable[A] =
-    LocalComputation(compute)
+  /**
+   * Local computation with caching - for cacheable types.
+   * Result is cached and replayed on resume.
+   */
+  def localCached[A, S <: DurableStorageBackend](compute: WorkflowSessionRunner.RunContext => A)(
+    using storage: DurableStorage[A, S]
+  ): Durable[A] =
+    LocalComputation(compute, Some(storage))
+
+  /**
+   * Local computation for ephemeral types - NOT cached.
+   * Result is acquired fresh on each replay.
+   * Use this for resources like connections, file handles, etc.
+   */
+  def localEphemeral[A](compute: WorkflowSessionRunner.RunContext => A)(
+    using ephemeral: DurableEphemeral[A]
+  ): Durable[A] =
+    LocalComputation(compute, None)
 
   // === Context access methods (shorthand for summon[DurableContext].xxx) ===
 
@@ -225,7 +279,7 @@ object Durable:
    * }}}
    */
   given durableRunContextProvider: AppContextAsyncProvider[Durable, WorkflowSessionRunner.RunContext] with
-    def get: Durable[WorkflowSessionRunner.RunContext] = LocalComputation(ctx => ctx)
+    def get: Durable[WorkflowSessionRunner.RunContext] = LocalComputation(ctx => ctx, None)
 
   /**
    * Get a resource from AppContext cache.
@@ -432,18 +486,26 @@ object Durable:
      * Used by preprocessor to wrap val definitions.
      * Takes explicit policy parameter - preprocessor passes RetryPolicy.default.
      */
-    def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy)
+    def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy, sourcePos: SourcePos = SourcePos.unknown)
                        (using storage: DurableStorage[A, S]): Durable[A] =
-      Durable.Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy)
+      println(s"[DEBUG] activitySync called at $sourcePos")
+      Durable.Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy, sourcePos)
 
     /**
      * Async variant of activitySync for dotty-cps-async.
      * Called when there's an await inside the activitySync block.
      * The by-name `=> A` becomes `() => Durable[A]` after CPS transformation.
+     *
+     * This caches the final result of the Durable computation. The inner
+     * Durable may contain activities that are also cached, but the final
+     * result (e.g., List.map result) is cached separately to avoid
+     * re-executing HOF lambdas on replay.
      */
-    def activitySync_async[A, S <: DurableStorageBackend](compute: () => Durable[A], policy: RetryPolicy)
+    def activitySync_async[A, S <: DurableStorageBackend](compute: () => Durable[A], policy: RetryPolicy, sourcePos: SourcePos = SourcePos.unknown)
                              (using storage: DurableStorage[A, S]): Durable[A] =
-      compute()
+      println(s"[DEBUG] activitySync_async called at $sourcePos")
+      // Use FlatMapCached to cache the result and skip inner activities on replay
+      Durable.FlatMapCached(Durable.Pure(()), _ => compute(), storage, sourcePos)
 
     /**
      * Async variant of activity for dotty-cps-async.
@@ -471,28 +533,28 @@ object Durable:
      * NOT cached - fresh on each access during replay.
      */
     def runContext: Durable[WorkflowSessionRunner.RunContext] =
-      Durable.LocalComputation(ctx => ctx)
+      Durable.LocalComputation(ctx => ctx, None)
 
     /**
      * Access the workflow ID at runtime.
      * NOT cached - fresh on each access during replay.
      */
     def workflowId: Durable[WorkflowId] =
-      Durable.LocalComputation(_.workflowId)
+      Durable.LocalComputation(_.workflowId, None)
 
     /**
      * Access the storage backend at runtime.
      * NOT cached - fresh on each access during replay.
      */
     def backend: Durable[DurableStorageBackend] =
-      Durable.LocalComputation(_.backend)
+      Durable.LocalComputation(_.backend, None)
 
     /**
      * Access the AppContext cache at runtime.
      * NOT cached - fresh on each access during replay.
      */
     def appContextCache: Durable[AppContext.Cache] =
-      Durable.LocalComputation(_.appContextCache)
+      Durable.LocalComputation(_.appContextCache, None)
 
     /**
      * Access raw configuration for a section.
@@ -502,14 +564,14 @@ object Durable:
      * @return Durable[Option[String]] - Some(config) if found, None otherwise
      */
     def configRaw(section: String): Durable[Option[String]] =
-      Durable.LocalComputation(ctx => ctx.configSource.getRaw(section))
+      Durable.LocalComputation(ctx => ctx.configSource.getRaw(section), None)
 
     /**
      * Generic context accessor.
      * NOT cached - fresh on each access during replay.
      */
     def context[A](f: WorkflowSessionRunner.RunContext => A): Durable[A] =
-      Durable.LocalComputation(f)
+      Durable.LocalComputation(f, None)
 
   /**
    * CpsTryMonad instance for async/await syntax.
