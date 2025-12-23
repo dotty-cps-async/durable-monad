@@ -41,9 +41,11 @@ class DurableBasicTest extends FunSuite:
       case _ => fail("Expected FlatMap(Pure(10), ...)")
   }
 
-  test("local creates LocalComputation node") {
+  test("localCached creates LocalComputation node with storage") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+
     var computed = false
-    val durable = Durable.local[Int] { _ =>
+    val durable = Durable.localCached[Int, MemoryBackingStore] { _ =>
       computed = true
       42
     }
@@ -52,8 +54,8 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.LocalComputation(_) => () // ok
-      case _ => fail("Expected LocalComputation")
+      case Durable.LocalComputation(_, Some(_), _) => () // ok - has storage
+      case _ => fail("Expected LocalComputation with storage")
   }
 
   test("activity creates Activity node") {
@@ -68,7 +70,7 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _, _) => () // ok - now has 3 fields (compute, storage, retryPolicy)
+      case Durable.Activity(_, _, _, _) => () // ok - now has 4 fields (compute, storage, retryPolicy, sourcePos)
       case _ => fail("Expected Activity(...)")
   }
 
@@ -83,7 +85,7 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _, _) => () // ok - now has 3 fields (compute, storage, retryPolicy)
+      case Durable.Activity(_, _, _, _) => () // ok - now has 4 fields (compute, storage, retryPolicy, sourcePos)
       case _ => fail("Expected Activity(...)")
   }
 
@@ -117,6 +119,6 @@ class DurableBasicTest extends FunSuite:
 
     // Just verify it compiles and creates a FlatMap chain
     durable match
-      case Durable.FlatMap(Durable.Activity(_, _, _), _) => () // ok
+      case Durable.FlatMap(Durable.Activity(_, _, _, _), _) => () // ok
       case _ => fail("Expected FlatMap(Activity(...), ...)")
   }

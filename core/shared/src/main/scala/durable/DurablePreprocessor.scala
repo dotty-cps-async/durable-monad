@@ -13,8 +13,9 @@ import cps.*
  *   if (cond) ...  →  if (await(ctx.activitySync { cond })) ...
  *
  * Resource handling:
- *   - When val has DurableEphemeral[T], wraps rest of block in WithSessionResource
+ *   - When val has DurableEphemeralResource[T], wraps rest of block in WithSessionResource
  *   - val file: FileHandle = openFile("x") → await(Durable.withResourceSync(openFile("x"), release){ file => restOfBlock })
+ *   - Plain DurableEphemeral[T] (marker only) does NOT trigger resource wrapping
  *
  * Transformation scope:
  *   - Transforms top-level vals and control flow
@@ -149,9 +150,9 @@ object DurablePreprocessor:
               effectExpr.pos
             )
 
-        // Get RetryPolicy.noRetry
+        // Get RetryPolicy.default
         val retryPolicyModule = Symbol.requiredModule("durable.RetryPolicy")
-        val noRetryPolicy = Select(Ref(retryPolicyModule), retryPolicyModule.fieldMember("noRetry"))
+        val defaultPolicy = Select(Ref(retryPolicyModule), retryPolicyModule.fieldMember("default"))
 
         // Build: toFutureConversion.apply[innerType](effectExpr) which returns Future[T]
         val applyMethod = toFutureConversion.tpe.widen.typeSymbol.methodMember("apply").head
@@ -182,7 +183,7 @@ object DurablePreprocessor:
           List(fileName, lineNum)
         )
 
-        // Build: Durable.Activity[T, S](() => ..., storage, noRetryPolicy, sourcePos)
+        // Build: Durable.Activity[T, S](() => ..., storage, defaultPolicy, sourcePos)
         val activityClass = Symbol.requiredClass("durable.Durable.Activity")
 
         // Activity case class takes: compute: () => Future[A], storage: DurableStorage[A, S], retryPolicy: RetryPolicy, sourcePos: SourcePos
@@ -194,7 +195,7 @@ object DurablePreprocessor:
               TypeTree.of(using backendType.asType)
             )
           ),
-          List(lambda, storage, noRetryPolicy, sourcePos)
+          List(lambda, storage, defaultPolicy, sourcePos)
         )
 
         // Wrap with await[Durable, T, Durable](activityCall)(using ctx, identityConversion)
@@ -483,7 +484,8 @@ object DurablePreprocessor:
 
     /**
      * Process block statements, detecting resource vals and restructuring.
-     * When a val has WorkflowSessionResource[T], wraps the rest of the block in WithSessionResource.
+     * When a val has DurableEphemeralResource[T], wraps the rest of the block in WithSessionResource.
+     * Plain DurableEphemeral[T] (marker only) does NOT trigger resource wrapping.
      */
     def transformBlockStatements(stats: List[Statement], expr: Term, isReturnPosition: Boolean): Term =
       stats match
@@ -492,9 +494,11 @@ object DurablePreprocessor:
 
         case (vd @ ValDef(name, tpt, Some(rhs))) :: rest =>
           val valType = widenAll(tpt.tpe)
-          val ephemeralType = TypeRepr.of[DurableEphemeral].appliedTo(valType)
+          // Only wrap in resource if DurableEphemeralResource is available (has release method)
+          // Plain DurableEphemeral is just a marker and doesn't trigger resource wrapping
+          val resourceType = TypeRepr.of[DurableEphemeralResource].appliedTo(valType)
 
-          Implicits.search(ephemeralType) match
+          Implicits.search(resourceType) match
             case iss: ImplicitSearchSuccess =>
               // This is an ephemeral resource val - wrap rest of block in WithSessionResource
               wrapWithEphemeralResource(vd, rhs, rest, expr, valType, iss.tree, isReturnPosition)
@@ -548,12 +552,12 @@ object DurablePreprocessor:
 
     /**
      * Wrap the rest of the block in WithSessionResource for an ephemeral resource val.
-     * Uses the user's expression for acquisition, takes release from DurableEphemeral.
+     * Uses the user's expression for acquisition, takes release from DurableEphemeralResource.
      *
      * Generates:
      *   await(Durable.withResourceSync(
      *     acquire = userExpression,
-     *     release = r => summon[DurableEphemeral[R]].release(r)
+     *     release = r => summon[DurableEphemeralResource[R]].release(r)
      *   ){ r => restOfBlock })
      */
     def wrapWithEphemeralResource(

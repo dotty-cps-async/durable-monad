@@ -22,7 +22,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run pure value") {
     withStorage {
       val workflowId = WorkflowId("test-1")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+      val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = Durable.pure[Int](42)
       WorkflowSessionRunner.run(workflow, ctx).map { result =>
@@ -34,7 +34,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run map") {
     withStorage {
       val workflowId = WorkflowId("test-2")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+      val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = Durable.pure[Int](21).map(_ * 2)
       WorkflowSessionRunner.run(workflow, ctx).map { result =>
@@ -46,7 +46,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run flatMap") {
     withStorage {
       val workflowId = WorkflowId("test-3")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+      val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = for
         a <- Durable.pure[Int](10)
@@ -139,7 +139,7 @@ class WorkflowSessionRunnerTest extends FunSuite:
   test("run error") {
     withStorage {
       val workflowId = WorkflowId("test-8")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+      val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
       val workflow = for
         a <- Durable.pure[Int](10)

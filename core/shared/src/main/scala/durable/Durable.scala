@@ -102,17 +102,6 @@ enum Durable[A]:
   ) extends Durable[B]
 
   /**
-   * Cached flatMapTry - caches the result of f(tryA) to skip inner activities on replay.
-   * Like FlatMapCached but handles both success and failure of fa.
-   */
-  case FlatMapTryCached[A, B, S <: DurableStorageBackend](
-    fa: Durable[A],
-    f: Try[A] => Durable[B],
-    storage: DurableStorage[B, S],
-    sourcePos: SourcePos = SourcePos.unknown
-  ) extends Durable[B]
-
-  /**
    * Continue as a new workflow - clears storage and restarts with new args.
    * Used for looping patterns since workflows are immutable.
    *
@@ -595,7 +584,6 @@ object Durable:
       op(new DurableContext)
 
   /**
-   * CpsPreprocessor for Durable monad - available via companion object.
    * Automatically wraps val definitions with activity calls for replay-based execution.
    */
   given durablePreprocessor[C <: DurableContext]: CpsPreprocessor[Durable, C] with

@@ -149,7 +149,7 @@ class DurableRawTest extends FunSuite:
       }
 
       val workflowId = WorkflowId("compare-preprocessor")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+      val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
       WorkflowSessionRunner.run(workflowWithPreprocessor, ctx).map { _ =>
         // Preprocessor version caches the val as activity
         assert(backing.size > 0, "Preprocessor should create activities")
@@ -170,7 +170,7 @@ class DurableRawTest extends FunSuite:
       }.toDurable
 
       val workflowId = WorkflowId("compare-raw")
-    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+      val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
       WorkflowSessionRunner.run(workflowRaw, ctx).map { _ =>
         // Raw version has no cached activities
         assertEquals(backing.size, 0, "Raw version should have no activities")

@@ -45,9 +45,10 @@ object DurableRaw:
                    (using storage: DurableStorage[A, S]): DurableRaw[A] =
     DurableRaw(Durable.activitySync(compute, policy))
 
-  /** Local computation */
+  /** Local computation - uncached (uses ephemeral marker) */
   def local[A](compute: WorkflowSessionRunner.RunContext => A): DurableRaw[A] =
-    Durable.local(compute)
+    given DurableEphemeral[A] = new DurableEphemeral[A] {}
+    Durable.localEphemeral(compute)
 
   /**
    * CpsMonadContext for DurableRaw - provides context for async/await.

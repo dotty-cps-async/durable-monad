@@ -258,9 +258,9 @@ class ResourceAccessTest extends FunSuite:
 
   // Tests for DurableEphemeral
 
-  test("DurableEphemeral.apply creates ephemeral resource typeclass") {
+  test("DurableEphemeralResource.apply creates ephemeral resource typeclass") {
     var releaseCount = 0
-    val ephemeral = DurableEphemeral[String](s => releaseCount += 1)
+    val ephemeral = DurableEphemeralResource[String](s => releaseCount += 1)
 
     ephemeral.release("test")
     assertEquals(releaseCount, 1)
@@ -274,15 +274,15 @@ class ResourceAccessTest extends FunSuite:
     var released = false
     def doWork(): String = "work-done"
 
-  test("DurableEphemeral auto-releases at end of async block") {
+  test("DurableEphemeralResource auto-releases at end of async block") {
     val workflowId = WorkflowId("ephemeral-auto-release-1")
     val resource = new TrackedResource
 
-    // Define DurableEphemeral for TrackedResource - preprocessor should detect this
-    given DurableEphemeral[TrackedResource] = DurableEphemeral(r => r.released = true)
+    // Define DurableEphemeralResource for TrackedResource - preprocessor should detect this
+    given DurableEphemeralResource[TrackedResource] = DurableEphemeralResource(r => r.released = true)
 
     val workflow = async[Durable] {
-      // The preprocessor should detect this val has DurableEphemeral and wrap rest in withResource
+      // The preprocessor should detect this val has DurableEphemeralResource and wrap rest in withResource
       val r: TrackedResource = resource
       r.doWork()
     }
@@ -303,11 +303,11 @@ class ResourceAccessTest extends FunSuite:
     }
   }
 
-  test("DurableEphemeral auto-releases on failure in async block") {
+  test("DurableEphemeralResource auto-releases on failure in async block") {
     val workflowId = WorkflowId("ephemeral-auto-release-failure-1")
     val resource = new TrackedResource
 
-    given DurableEphemeral[TrackedResource] = DurableEphemeral(r => r.released = true)
+    given DurableEphemeralResource[TrackedResource] = DurableEphemeralResource(r => r.released = true)
 
     val workflow = async[Durable] {
       val r: TrackedResource = resource
@@ -350,8 +350,8 @@ class ResourceAccessTest extends FunSuite:
     ContinueWithTestTracker.allocations = ContinueWithTestTracker.allocations :+ iteration
     def doWork(): String = s"work-$iteration"
 
-  // DurableEphemeral needs to be at class level so preprocessor can see it
-  given iterationResourceEphemeral: DurableEphemeral[IterationResource] = DurableEphemeral { r =>
+  // DurableEphemeralResource needs to be at class level so preprocessor can see it
+  given iterationResourceEphemeral: DurableEphemeralResource[IterationResource] = DurableEphemeralResource { r =>
     ContinueWithTestTracker.releases = ContinueWithTestTracker.releases :+ r.iteration
   }
 
@@ -375,7 +375,7 @@ class ResourceAccessTest extends FunSuite:
         }
       }
 
-  test("DurableEphemeral with continueWith - releases resource on each ContinueAs") {
+  test("DurableEphemeralResource with continueWith - releases resource on each ContinueAs") {
     import cps.*
 
     // Reset the tracker before the test
@@ -428,5 +428,69 @@ class ResourceAccessTest extends FunSuite:
 
         case other =>
           fail(s"Expected ContinueAs on first iteration, got $other")
+    }
+  }
+
+  // Test for DurableEphemeralResource.derived with AutoCloseable
+  // When a class extends AutoCloseable and derives DurableEphemeralResource,
+  // the derived instance should have close() as the release function
+
+  class CloseableResource extends AutoCloseable derives DurableEphemeralResource:
+    var closed = false
+    def doWork(): String = "closeable-work"
+    override def close(): Unit = closed = true
+
+  test("derives DurableEphemeralResource on Closeable type calls close() automatically") {
+    val workflowId = WorkflowId("closeable-derived-test")
+    val resource = new CloseableResource
+
+    val workflow = async[Durable] {
+      // The derived DurableEphemeralResource for CloseableResource has release = _.close()
+      val r: CloseableResource = resource
+      r.doWork()
+    }
+
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+    val result = async[Future] {
+      await(WorkflowSessionRunner.run(workflow, ctx))
+    }
+
+    async[Future] {
+      val res = await(result)
+      res match
+        case WorkflowSessionResult.Completed(_, value) =>
+          assertEquals(value, "closeable-work")
+          assert(resource.closed, "Closeable resource should have close() called automatically via DurableEphemeralResource.derived")
+        case other =>
+          fail(s"Expected Completed, got $other")
+    }
+  }
+
+  // Also test that non-Closeable derived does NOT wrap in resource
+  class NonCloseableService derives DurableEphemeral:
+    def doWork(): String = "service-work"
+
+  test("derives DurableEphemeral on non-Closeable type does NOT wrap in resource") {
+    val workflowId = WorkflowId("non-closeable-derived-test")
+
+    // This should compile and work - the derived DurableEphemeral is just a marker
+    // and should NOT cause resource wrapping (no release method)
+    val workflow = async[Durable] {
+      val service: NonCloseableService = new NonCloseableService
+      service.doWork()
+    }
+
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+    val result = async[Future] {
+      await(WorkflowSessionRunner.run(workflow, ctx))
+    }
+
+    async[Future] {
+      val res = await(result)
+      res match
+        case WorkflowSessionResult.Completed(_, value) =>
+          assertEquals(value, "service-work")
+        case other =>
+          fail(s"Expected Completed, got $other")
     }
   }

@@ -24,12 +24,6 @@ private[engine] enum StackFrame:
     index: Int,
     storage: DurableStorage[?, S]
   )
-  /** Cached try handler - caches f(Try(a)) result at given index */
-  case TryHandlerCached[S <: DurableStorageBackend](
-    f: Try[Any] => Durable[?],
-    index: Int,
-    storage: DurableStorage[?, S]
-  )
   /** Cache result frame - caches the value when continuation completes */
   case CacheResult[S <: DurableStorageBackend](
     index: Int,
@@ -129,9 +123,6 @@ object WorkflowSessionRunner:
       case fmc: Durable.FlatMapCached[a, b, s] =>
         handleFlatMapCached[A, a, b, s](fmc, ctx, state, stack)
 
-      case fmtc: Durable.FlatMapTryCached[a, b, s] =>
-        handleFlatMapTryCached[A, a, b, s](fmtc, ctx, state, stack)
-
       case Durable.Error(error) =>
         continueWith(Failure(error), ctx, state, stack)
 
@@ -226,15 +217,6 @@ object WorkflowSessionRunner:
           case NonFatal(e) =>
             continueWith(Failure(e), ctx, state, rest)
 
-      // Success through cached try handler - run f(Success(value)), then cache result
-      case (Success(value), StackFrame.TryHandlerCached(f, index, storage) :: rest) =>
-        try
-          val next = f(Success(value))
-          stepsUntilSuspend(next, ctx, state, StackFrame.CacheResult(index, storage) :: rest)
-        catch
-          case NonFatal(e) =>
-            continueWith(Failure(e), ctx, state, rest)
-
       // Error skips cached continuation (unwinding) - but still need to handle caching failure
       case (Failure(error), StackFrame.ContCached(_, index, storage) :: rest) =>
         // Cache the failure, then continue unwinding
@@ -245,15 +227,6 @@ object WorkflowSessionRunner:
           }.recoverWith { case e =>
             continueWith(Failure(e), ctx, state, rest)
           }
-
-      // Error caught by cached try handler - run f(Failure(error)), then cache result
-      case (Failure(error), StackFrame.TryHandlerCached(f, index, storage) :: rest) =>
-        try
-          val next = f(Failure(error))
-          stepsUntilSuspend(next, ctx, state, StackFrame.CacheResult(index, storage) :: rest)
-        catch
-          case NonFatal(e) =>
-            continueWith(Failure(e), ctx, state, rest)
 
       // CacheResult frame - cache the value and continue
       case (Success(value), StackFrame.CacheResult(index, storage) :: rest) =>
@@ -382,42 +355,6 @@ object WorkflowSessionRunner:
       // First run: push ContCached frame to cache f(a) result, continue with fa
       stepsUntilSuspend(fmc.fa, ctx, state,
         StackFrame.ContCached(fmc.f.asInstanceOf[Any => Durable[?]], index, storage) :: stack)
-
-  /**
-   * Handle FlatMapTryCached - like FlatMapCached but handles both success and failure of fa.
-   */
-  private def handleFlatMapTryCached[A, X, B, S <: DurableStorageBackend](
-    fmtc: Durable.FlatMapTryCached[X, B, S],
-    ctx: RunContext,
-    state: InterpreterState,
-    stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
-    val storage = fmtc.storage
-    val backend = ctx.backend.asInstanceOf[S]
-    val index = state.nextIndex()
-
-    if ctx.config.traceEnabled then
-      val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
-      println(s"[TRACE] FlatMapTryCached #$index at ${fmtc.sourcePos}: $mode")
-
-    if state.isReplayingAt(index) then
-      // Short-circuit! Get cached result without executing fa or f
-      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
-        case Some(Right(cached)) =>
-          continueWith(Success(cached), ctx, state, stack)
-        case Some(Left(storedFailure)) =>
-          continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
-        case None =>
-          continueWith(Failure(RuntimeException(
-            s"Missing cached result for FlatMapTryCached at index=$index during replay"
-          )), ctx, state, stack)
-      }.recoverWith { case e =>
-        continueWith(Failure(e), ctx, state, stack)
-      }
-    else
-      // First run: push TryHandlerCached frame to cache f(Try(a)) result, continue with fa
-      stepsUntilSuspend(fmtc.fa, ctx, state,
-        StackFrame.TryHandlerCached(fmtc.f.asInstanceOf[Try[Any] => Durable[?]], index, storage) :: stack)
 
   /**
    * Handle Activity - assign index, check cache, execute if needed with retry, cache result.

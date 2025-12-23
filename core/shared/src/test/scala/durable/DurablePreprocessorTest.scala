@@ -309,16 +309,16 @@ class DurablePreprocessorTest extends FunSuite:
   }
 
   // ============================================================
-  // Tests for preprocessor resource detection (DurableEphemeral)
+  // Tests for preprocessor resource detection (DurableEphemeralResource)
   // ============================================================
 
-  // Test resource type with DurableEphemeral
+  // Test resource type with DurableEphemeralResource
   class TestResource(val id: Int):
     var released: Boolean = false
     def release(): Unit = released = true
     def compute(x: Int): Int = x * id
 
-  test("preprocessor auto-wraps val with DurableEphemeral in WithSessionResource") {
+  test("preprocessor auto-wraps val with DurableEphemeralResource in WithSessionResource") {
     given backing: MemoryBackingStore = MemoryBackingStore()
     val workflowId = WorkflowId("preprocess-resource-1")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
@@ -326,7 +326,7 @@ class DurablePreprocessorTest extends FunSuite:
     val releaseCount = TestCounter()
 
     // Only release is provided - user's expression is used for acquisition
-    given DurableEphemeral[TestResource] = DurableEphemeral(
+    given DurableEphemeralResource[TestResource] = DurableEphemeralResource(
       r => { releaseCount.increment(); r.release() }
     )
 
@@ -349,7 +349,7 @@ class DurablePreprocessorTest extends FunSuite:
     val releaseCount = TestCounter()
     val computeCount = TestCounter()
 
-    given DurableEphemeral[TestResource] = DurableEphemeral(
+    given DurableEphemeralResource[TestResource] = DurableEphemeralResource(
       r => { releaseCount.increment(); r.release() }
     )
 
@@ -388,7 +388,7 @@ class DurablePreprocessorTest extends FunSuite:
     // Use a mutable list builder outside the async block - appending via method call
     val releaseOrderBuilder = scala.collection.mutable.ListBuffer[Int]()
 
-    given DurableEphemeral[TestResource] = DurableEphemeral(
+    given DurableEphemeralResource[TestResource] = DurableEphemeralResource(
       r => { releaseOrderBuilder.append(r.id); r.release() }
     )
 
@@ -413,7 +413,7 @@ class DurablePreprocessorTest extends FunSuite:
 
     val releaseCount = TestCounter()
 
-    given DurableEphemeral[TestResource] = DurableEphemeral(
+    given DurableEphemeralResource[TestResource] = DurableEphemeralResource(
       r => { releaseCount.increment(); r.release() }
     )
 
