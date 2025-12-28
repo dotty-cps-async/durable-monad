@@ -276,4 +276,6 @@ The main bottleneck is review (same as with humans). Most of my writing was not 
 
 In short, heavy LLM-assisted software engineering is possible. It's nontrivial — requires discipline — but eventually more powerful than traditional craft. Sometimes I feel like a road worker with a shovel seeing an excavator for the first time.
 
+---
 
+The library is available at [github.com/dotty-cps-async/durable-monad](https://github.com/dotty-cps-async/durable-monad).
