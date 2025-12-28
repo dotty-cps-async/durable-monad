@@ -1,10 +1,12 @@
 import sbtcrossproject.CrossPlugin.autoImport.{crossProject, CrossType}
 
 ThisBuild / scalaVersion := "3.3.7"
+ThisBuild / version := "0.1.0"
+ThisBuild / versionScheme := Some("semver-spec")
+ThisBuild / publishTo := localStaging.value
 
 // Shared library dependencies
-lazy val catsEffectVersion = "3.5.7"
-lazy val cpsAsyncVersion = "1.2.0-SNAPSHOT"
+lazy val cpsAsyncVersion = "1.2.0"
 lazy val cpsAsyncOrg = "io.github.dotty-cps-async"
 lazy val appContextVersion = "0.3.0"
 lazy val jsoniterVersion = "2.30.15"
@@ -14,6 +16,7 @@ lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   .crossType(CrossType.Full)
   .in(file("core"))
   .settings(
+    organization := "io.github.dotty-cps-async",
     name := "durable-monad-core",
     libraryDependencies ++= Seq(
       cpsAsyncOrg %%% "dotty-cps-async" % cpsAsyncVersion,
