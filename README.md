@@ -56,7 +56,7 @@ libraryDependencies += "io.github.dotty-cps-async" %%% "durable-monad-core" % "0
 - [Quick Start](docs/quick-start.md) — Birthday reminder workflow with events and timers
 - [User Manual](docs/user-manual.md) — Complete API reference
 - [How It Works](docs/blogpost/durable-execution-at-home.md) — The free monad approach explained
-- [Related Projects](docs/blogpost/references.md) — Temporal, Restate, Azure Durable Functions, and more
+- [Related Projects](docs/references.md) — Temporal, Restate, Azure Durable Functions, and more
 
 ## Key Features
 

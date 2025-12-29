@@ -46,7 +46,7 @@ There are theoretically two methods for durable executions: replay-based and sna
 
 Most durable execution engines today use replay semantics. Widely available industrial language runtimes do not support persistent snapshotting. JVM world is not an exception; there is a CRaC (Coordinated Restore at Checkpoint) project in OpenJDK [https://openjdk.org/projects/crac/], but it is still at a relatively early stage.
 
-See also [related solutions and references](https://github.com/dotty-cps-async/durable-monad/blob/main/docs/blogpost/references.md).
+See also [related solutions and references](https://github.com/dotty-cps-async/durable-monad/blob/main/docs/references.md).
 
 ### Preprocessing
 
