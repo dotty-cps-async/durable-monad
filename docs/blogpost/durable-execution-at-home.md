@@ -70,7 +70,7 @@ object Durable:
 
 It will transform code inside our monad brackets in something like:
 
-```
+```Scala
 def apply(customerId: CustomerId)(using MemoryBackingStore): Durable[OnboardingResult] =
     async[Durable] {
       // Val RHSes with .await on Durable[T] - unchanged (identity conversion)
@@ -124,7 +124,7 @@ For loops we can restart workflow with different arguments with the help of `con
 
   So, checking the customer's monthly subscription will look as follows: 
 
-```
+```Scala
 def apply(subscriptionId: SubscriptionId, totalBilled: BigDecimal, cyclesCompleted: Int)(
     using MemoryBackingStore
   ): Durable[SubscriptionResult] =
@@ -199,7 +199,7 @@ Durable functions are instantiated from the object name — during engine startu
 Environmental entities (such as services) can be received by type-driven dependency injection.  
 Configurations and shared AppContext we can keep in WorkflowEngine and pass to dependency resolver, using app-context tagless free facilities:
 
-```
+```Scala
   // AppContextAsyncProvider[Durable, T] - derived from RunContext (has cache + config)
   given (using runCtxProvider: AppContextAsyncProvider[Durable, WorkflowSessionRunner.RunContext]):
       AppContextAsyncProvider[Durable, EmailService] with
@@ -215,7 +215,7 @@ Configurations and shared AppContext we can keep in WorkflowEngine and pass to d
 Besides time, we can work with custom durable events. 
 For example,  below is workflow of auction which process bid events until timeout:
 
-```
+```Scala
 def apply(
     item: AuctionItem,
     endTime: Instant,
