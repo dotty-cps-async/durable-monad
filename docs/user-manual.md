@@ -4,6 +4,14 @@
 
 durable-monad is a Scala library for building monadic durable workflows. It provides replay-based execution where activities are cached and workflows can survive process restarts.
 
+### What is Durable Execution?
+
+Durable execution is an approach where workflow state persists across process restarts. A workflow that sends an email, waits two days, then queries a database will resume from its suspension point after a server restart, preserving progress and avoiding duplicate operations.
+
+The model assumes processes will crash. External calls (HTTP requests, database writes) are cached in storage. Timers are persisted. When a process restarts, it replays the workflow from cached history, skipping completed steps and continuing from the last suspension point.
+
+This approach allows writing long-running business logic as sequential code — order fulfillment spanning days, subscription billing cycles, approval workflows — without explicit state machines or job queues.
+
 ## Core Concepts
 
 ### The Durable Monad

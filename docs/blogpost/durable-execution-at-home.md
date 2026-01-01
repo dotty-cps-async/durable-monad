@@ -1,7 +1,6 @@
 # We have Durable Execution at home.
 
-Durable execution is on the rise — pioneered by Azure Durable Functions, now engines like Temporal and Restate are gaining traction for managing long-running workflows.
-When something becomes popular, we can build a monad for it.
+Durable execution is on the rise — pioneered by Azure Durable Functions, now engines like Temporal and Restate are gaining traction for managing long-running workflows. When something becomes popular, we can build a monad for it.
 
 Let's start with the famous example: a reminder email during customer onboarding. After the customer is registered, we wait 2 days, then send a reminder if the customer hasn't used our app.
 
