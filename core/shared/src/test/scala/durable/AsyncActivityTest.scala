@@ -192,3 +192,113 @@ class AsyncActivityTest extends FunSuite:
       case other => fail(s"Expected Completed, got $other")
     }
   }
+
+  // === LocalAsync tests - ephemeral types (NOT cached) ===
+
+  // Custom ephemeral type for testing - explicitly marked as non-cacheable
+  case class LogEntry(msg: String)
+  given DurableEphemeral[LogEntry] = new DurableEphemeralImpl[LogEntry]
+
+  test("localAsync for Future[EphemeralType] is NOT cached") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("local-async-1")
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+
+    var logCount = 0
+    def log(msg: String): Future[LogEntry] = {
+      logCount += 1
+      Future.successful(LogEntry(msg))
+    }
+
+    val workflow = async[Durable] {
+      // Future[LogEntry] - LogEntry is DurableEphemeral, so this uses LocalAsync
+      val _: Future[LogEntry] = log("processing")
+      42
+    }
+
+    WorkflowSessionRunner.run(workflow, ctx).map {
+      case WorkflowSessionResult.Completed(_, result) =>
+        assertEquals(result, 42)
+        assertEquals(logCount, 1)
+        // LocalAsync does NOT cache - backing is empty
+        // (42 at return position is not wrapped)
+        assertEquals(backing.size, 0)
+      case other => fail(s"Expected Completed, got $other")
+    }
+  }
+
+  test("localAsync re-executes on replay (not cached)") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("local-async-replay")
+
+    var logCount = 0
+    def log(msg: String): Future[LogEntry] = {
+      logCount += 1
+      Future.successful(LogEntry(msg))
+    }
+
+    val workflow = async[Durable] {
+      val _: Future[LogEntry] = log("hello")
+      42
+    }
+
+    // First run
+    val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
+    WorkflowSessionRunner.run(workflow, ctx1).flatMap {
+      case WorkflowSessionResult.Completed(_, result1) =>
+        assertEquals(result1, 42)
+        assertEquals(logCount, 1)
+
+        // Second run - replay
+        // Reset counter to verify re-execution
+        logCount = 0
+        val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
+        WorkflowSessionRunner.run(workflow, ctx2).map {
+          case WorkflowSessionResult.Completed(_, result2) =>
+            assertEquals(result2, 42)
+            // LocalAsync re-executes on replay - NOT cached
+            assertEquals(logCount, 1)
+          case other => fail(s"Expected Completed on replay, got $other")
+        }
+      case other => fail(s"Expected Completed, got $other")
+    }
+  }
+
+  test("localAsync vs asyncActivity - ephemeral vs storable") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("local-vs-async")
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+
+    var ephemeralCount = 0
+    var storableCount = 0
+
+    def ephemeralOp(): Future[LogEntry] = {
+      ephemeralCount += 1
+      Future.successful(LogEntry("log"))
+    }
+
+    def storableOp(): Future[Int] = {
+      storableCount += 1
+      Future.successful(42)
+    }
+
+    val workflow = async[Durable] {
+      // Future[LogEntry] - ephemeral, uses LocalAsync, NOT cached
+      val _: Future[LogEntry] = ephemeralOp()
+      // Future[Int] - storable, uses AsyncActivity, cached
+      val result: Future[Int] = storableOp()
+      result
+    }
+
+    WorkflowSessionRunner.run(workflow, ctx).flatMap {
+      case WorkflowSessionResult.Completed(_, futureResult) =>
+        futureResult.map { value =>
+          assertEquals(value, 42)
+          assertEquals(ephemeralCount, 1)
+          assertEquals(storableCount, 1)
+          // Only the Future[Int] result is cached (AsyncActivity), not Future[LogEntry] (LocalAsync)
+          assertEquals(backing.size, 1)
+        }
+      case other => fail(s"Expected Completed, got $other")
+    }
+  }

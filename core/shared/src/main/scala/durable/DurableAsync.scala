@@ -6,6 +6,7 @@ import scala.util.{Try, Success, Failure}
 import scala.util.control.NonFatal
 
 import durable.runtime.Scheduler
+import durable.engine.WorkflowSessionRunner.RunContext
 
 /**
  * Typeclass for wrapping async operations in durable workflows.
@@ -24,7 +25,7 @@ import durable.runtime.Scheduler
  */
 trait DurableAsync[F[_]]:
   /**
-   * Wrap an async operation for durable execution.
+   * Wrap an async operation for durable (cached) execution.
    *
    * @param op Thunk producing F[T] - only called on fresh run
    * @param index Activity index for caching
@@ -37,7 +38,7 @@ trait DurableAsync[F[_]]:
    * @param backend Storage backend instance
    * @return F[T] - either from cache or fresh execution
    */
-  def wrap[T, S <: DurableStorageBackend](
+  def wrapCached[T, S <: DurableStorageBackend](
     op: () => F[T],
     index: Int,
     workflowId: WorkflowId,
@@ -46,6 +47,16 @@ trait DurableAsync[F[_]]:
     scheduler: Scheduler,
     retryLogger: RetryLogger
   )(using storage: DurableStorage[T, S], backend: S): F[T]
+
+  /**
+   * Wrap an async operation for ephemeral (non-cached) execution.
+   * Used for operations returning DurableEphemeral types.
+   *
+   * @param op Thunk producing F[T]
+   * @param runContext The workflow run context
+   * @return F[T] - executed without caching
+   */
+  def wrapEphemeral[T](op: () => F[T], runContext: RunContext): F[T]
 
 
 object DurableAsync:
@@ -67,7 +78,7 @@ object DurableAsync:
    * - Return the chained Future (completes after both computation AND storage)
    */
   given futureWrapper(using ec: ExecutionContext): DurableAsync[Future] with
-    def wrap[T, S <: DurableStorageBackend](
+    def wrapCached[T, S <: DurableStorageBackend](
       op: () => Future[T],
       index: Int,
       workflowId: WorkflowId,
@@ -105,6 +116,10 @@ object DurableAsync:
         }
       else
         executeFresh()
+
+    def wrapEphemeral[T](op: () => Future[T], runContext: RunContext): Future[T] =
+      // For ephemeral types, just execute without caching
+      op()
 
     /**
      * Execute computation with retry logic.

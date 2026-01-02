@@ -139,6 +139,9 @@ object WorkflowSessionRunner:
       case asyncActivity: Durable.AsyncActivity[f, t, s] =>
         handleAsyncActivity[A, f, t, s](asyncActivity, ctx, state, stack)
 
+      case localAsync: Durable.LocalAsync[f, t] =>
+        handleLocalAsync[A, f, t](localAsync, ctx, state, stack)
+
       case suspend: Durable.Suspend[a, s] =>
         handleSuspend[A, a, s](suspend, ctx, state, stack)
 
@@ -488,7 +491,7 @@ object WorkflowSessionRunner:
     given S = backend
 
     // Wrapper handles all logic: cache check, execution with retry, caching on completion
-    val resultF: F[T] = asyncActivity.wrapper.wrap(
+    val resultF: F[T] = asyncActivity.wrapper.wrapCached(
       asyncActivity.compute,
       index,
       ctx.workflowId,
@@ -499,6 +502,26 @@ object WorkflowSessionRunner:
     )
 
     // Continue IMMEDIATELY with F[T] (wrapper returns immediately)
+    continueWith(Success(resultF), ctx, state, stack)
+
+  /**
+   * Handle LocalAsync - ephemeral async activity, NOT cached.
+   *
+   * Unlike AsyncActivity:
+   *   - Does NOT assign an index (not tracked in journal)
+   *   - Does NOT cache the result
+   *   - Just executes and returns F[T]
+   */
+  private def handleLocalAsync[A, F[_], T](
+    localAsync: Durable.LocalAsync[F, T],
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+    // No index assignment, no caching - just execute
+    val resultF: F[T] = localAsync.wrapper.wrapEphemeral(localAsync.compute, ctx)
+
+    // Continue IMMEDIATELY with F[T]
     continueWith(Success(resultF), ctx, state, stack)
 
   /**

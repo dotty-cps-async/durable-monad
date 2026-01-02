@@ -137,6 +137,24 @@ enum Durable[A]:
   ) extends Durable[F[T]]
 
   /**
+   * Local async activity for ephemeral types - NOT cached.
+   *
+   * Used when the inner type T has DurableEphemeral[T] instead of DurableStorage[T, S].
+   * Returns F[T] immediately (parallel execution preserved) but does not cache the result.
+   *
+   * On interpretation:
+   *   - Does NOT assign index (not tracked in journal)
+   *   - Delegates to DurableAsync.wrapEphemeral which just executes
+   *   - Returns F[T] immediately
+   *
+   * Use cases: logging, metrics, IO[Unit], operations on ephemeral types
+   */
+  case LocalAsync[F[_], T](
+    compute: () => F[T],
+    wrapper: DurableAsync[F]
+  ) extends Durable[F[T]]
+
+  /**
    * Resource acquisition with bracket semantics - NOT journaled.
    *
    * This case handles both environment access and scoped resources through a unified pattern.
@@ -512,6 +530,15 @@ object Durable:
     def activityAsync[F[_], T, S <: DurableStorageBackend](compute: => F[T], policy: RetryPolicy)
                         (using wrapper: DurableAsync[F], storage: DurableStorage[T, S]): Durable[F[T]] =
       Durable.AsyncActivity(() => compute, storage, policy, wrapper)
+
+    /**
+     * Create a local async activity for ephemeral types - NOT cached.
+     * Used by preprocessor when val F[T] = expr where DurableEphemeral[T] exists.
+     * Returns F[T] immediately, runs in parallel with subsequent code.
+     */
+    def localAsync[F[_], T](compute: => F[T])
+                           (using wrapper: DurableAsync[F]): Durable[F[T]] =
+      Durable.LocalAsync(() => compute, wrapper)
 
     // === Context access methods (NOT cached - uses LocalComputation) ===
 

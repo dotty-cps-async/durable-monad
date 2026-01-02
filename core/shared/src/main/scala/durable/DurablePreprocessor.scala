@@ -259,8 +259,15 @@ object DurablePreprocessor:
           val wrapperType = TypeRepr.of[DurableAsync].appliedTo(fType)
           Implicits.search(wrapperType) match
             case iss: ImplicitSearchSuccess =>
-              // Use activityAsync for F[T] types with wrapper
-              wrapWithActivityAsync(expr, exprType, fType, tType)
+              // Check if inner type T is ephemeral (no storage, not cached)
+              val ephemeralType = TypeRepr.of[DurableEphemeral].appliedTo(tType)
+              Implicits.search(ephemeralType) match
+                case _: ImplicitSearchSuccess =>
+                  // Use localAsync for ephemeral types - NOT cached
+                  wrapWithLocalAsync(expr, exprType, fType, tType)
+                case _: ImplicitSearchFailure =>
+                  // Use activityAsync for F[T] types with storage - cached
+                  wrapWithActivityAsync(expr, exprType, fType, tType)
             case isf: ImplicitSearchFailure =>
               // No wrapper available, use regular activitySync
               wrapWithActivitySync(expr, exprType)
@@ -354,6 +361,42 @@ object DurablePreprocessor:
       )
       // First apply: the value Durable[F[T]]
       val awaitApply1 = Apply(awaitWithTypes, List(activityCall))
+      // Second apply: the using parameters (ctx, conversion)
+      val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))
+      val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
+      Apply(awaitApply1, List(ctx.asTerm, identityConversionTyped))
+
+    def wrapWithLocalAsync(expr: Term, exprType: TypeRepr, fType: TypeRepr, tType: TypeRepr): Term =
+      // Build: ctx.localAsync[F, T](expr)
+      // where F is the effect type (e.g., Future), T is the inner (ephemeral) type
+      // DurableAsync[F] is resolved via normal given resolution
+      // No storage needed - this is for ephemeral types
+
+      // Build: ctx.localAsync[F, T](expr)
+      val localAsyncCall = Apply(
+        TypeApply(
+          Select.unique(ctx.asTerm, "localAsync"),
+          List(
+            TypeTree.of(using fType.asType),
+            TypeTree.of(using tType.asType)
+          )
+        ),
+        List(expr)
+      )
+
+      // Build: await[Durable, F[T], Durable](localAsyncCall)(using ctx, identityConversion)
+      // This extracts F[T] from Durable[F[T]]
+      val awaitRef = Ref(Symbol.requiredMethod("cps.await"))
+      val awaitWithTypes = TypeApply(
+        awaitRef,
+        List(
+          TypeTree.of[Durable],
+          TypeTree.of(using exprType.asType),  // F[T]
+          TypeTree.of[Durable]
+        )
+      )
+      // First apply: the value Durable[F[T]]
+      val awaitApply1 = Apply(awaitWithTypes, List(localAsyncCall))
       // Second apply: the using parameters (ctx, conversion)
       val identityConversionRef = Ref(Symbol.requiredMethod("cps.CpsMonadConversion.identityConversion"))
       val identityConversionTyped = TypeApply(identityConversionRef, List(TypeTree.of[Durable]))
