@@ -20,6 +20,7 @@ class AsyncActivityTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import MemoryBackingStore.given
+  private val runner = WorkflowSessionRunner.forFuture
 
   test("async activity caches Future result") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -38,7 +39,7 @@ class AsyncActivityTest extends FunSuite:
       result
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).flatMap {
+    runner.run(workflow, ctx).map(_.toOption.get).flatMap {
       case WorkflowSessionResult.Completed(_, futureResult) =>
         futureResult.map { value =>
           assertEquals(value, 42)
@@ -66,7 +67,7 @@ class AsyncActivityTest extends FunSuite:
 
     // First run - computes
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
-    WorkflowSessionRunner.run(workflow, ctx1).flatMap {
+    runner.run(workflow, ctx1).map(_.toOption.get).flatMap {
       case WorkflowSessionResult.Completed(_, futureResult1) =>
         futureResult1.flatMap { value1 =>
           assertEquals(value1, 42)
@@ -75,7 +76,7 @@ class AsyncActivityTest extends FunSuite:
           // Second run - replay from cache
           callCount = 0
           val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
-          WorkflowSessionRunner.run(workflow, ctx2).flatMap {
+          runner.run(workflow, ctx2).map(_.toOption.get).flatMap {
             case WorkflowSessionResult.Completed(_, futureResult2) =>
               futureResult2.map { value2 =>
                 assertEquals(value2, 42)
@@ -108,7 +109,7 @@ class AsyncActivityTest extends FunSuite:
     // First run - fails after retries and caches failure
     // Default RetryPolicy.default has maxAttempts=3
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
-    WorkflowSessionRunner.run(workflow, ctx1).flatMap {
+    runner.run(workflow, ctx1).map(_.toOption.get).flatMap {
       case WorkflowSessionResult.Completed(_, futureResult1) =>
         futureResult1.transformWith {
           case Failure(e: MaxRetriesExceededException) =>
@@ -120,7 +121,7 @@ class AsyncActivityTest extends FunSuite:
             // Second run - replays failure from cache
             callCount = 0
             val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
-            WorkflowSessionRunner.run(workflow, ctx2).flatMap {
+            runner.run(workflow, ctx2).map(_.toOption.get).flatMap {
               case WorkflowSessionResult.Completed(_, futureResult2) =>
                 futureResult2.transformWith {
                   case Failure(e2: ReplayedException) =>
@@ -156,7 +157,7 @@ class AsyncActivityTest extends FunSuite:
       optResult.getOrElse(0)
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(callCount.get, 1)
       // Both the Unit from increment() and the Option[Int] are cached
@@ -180,7 +181,7 @@ class AsyncActivityTest extends FunSuite:
       (syncVal, asyncVal, anotherSync)
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).flatMap {
+    runner.run(workflow, ctx).map(_.toOption.get).flatMap {
       case WorkflowSessionResult.Completed(_, (s1, futureVal, s2)) =>
         futureVal.map { asyncResult =>
           assertEquals(s1 + asyncResult + s2, 42)
@@ -216,7 +217,7 @@ class AsyncActivityTest extends FunSuite:
       42
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map {
+    runner.run(workflow, ctx).map(_.toOption.get).map {
       case WorkflowSessionResult.Completed(_, result) =>
         assertEquals(result, 42)
         assertEquals(logCount, 1)
@@ -244,7 +245,7 @@ class AsyncActivityTest extends FunSuite:
 
     // First run
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
-    WorkflowSessionRunner.run(workflow, ctx1).flatMap {
+    runner.run(workflow, ctx1).map(_.toOption.get).flatMap {
       case WorkflowSessionResult.Completed(_, result1) =>
         assertEquals(result1, 42)
         assertEquals(logCount, 1)
@@ -253,7 +254,7 @@ class AsyncActivityTest extends FunSuite:
         // Reset counter to verify re-execution
         logCount = 0
         val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
-        WorkflowSessionRunner.run(workflow, ctx2).map {
+        runner.run(workflow, ctx2).map(_.toOption.get).map {
           case WorkflowSessionResult.Completed(_, result2) =>
             assertEquals(result2, 42)
             // LocalAsync re-executes on replay - NOT cached
@@ -290,7 +291,7 @@ class AsyncActivityTest extends FunSuite:
       result
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).flatMap {
+    runner.run(workflow, ctx).map(_.toOption.get).flatMap {
       case WorkflowSessionResult.Completed(_, futureResult) =>
         futureResult.map { value =>
           assertEquals(value, 42)

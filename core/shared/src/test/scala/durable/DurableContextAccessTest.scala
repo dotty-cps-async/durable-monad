@@ -11,6 +11,8 @@ import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
 
 class DurableContextAccessTest extends FunSuite:
 
+  private val runner = WorkflowSessionRunner.forFuture
+
   // Test backend
   given testBackend: MemoryBackingStore = MemoryBackingStore()
   import MemoryBackingStore.given
@@ -25,7 +27,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -48,7 +50,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -72,7 +74,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -96,7 +98,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -119,7 +121,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -150,7 +152,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -175,7 +177,7 @@ class DurableContextAccessTest extends FunSuite:
     // First run
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result1 = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx1))
+      await(runner.run(workflow, ctx1).map(_.toOption.get))
     }
 
     async[Future] {
@@ -186,7 +188,7 @@ class DurableContextAccessTest extends FunSuite:
 
           // Second run with resume (simulating replay behavior)
           val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)
-          val result2 = await(WorkflowSessionRunner.run(workflow, ctx2))
+          val result2 = await(runner.run(workflow, ctx2).map(_.toOption.get))
 
           result2 match
             case WorkflowSessionResult.Completed(_, value2) =>
@@ -216,7 +218,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -240,7 +242,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -264,7 +266,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -288,7 +290,7 @@ class DurableContextAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(expectedId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {

@@ -70,7 +70,7 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _, _, _) => () // ok - now has 4 fields (compute, storage, retryPolicy, sourcePos)
+      case Durable.Activity(_, _, _, _, _) => () // ok - now has 5 fields (compute, tag, storage, retryPolicy, sourcePos)
       case _ => fail("Expected Activity(...)")
   }
 
@@ -85,7 +85,7 @@ class DurableBasicTest extends FunSuite:
     assertEquals(computed, false)
 
     durable match
-      case Durable.Activity(_, _, _, _) => () // ok - now has 4 fields (compute, storage, retryPolicy, sourcePos)
+      case Durable.Activity(_, _, _, _, _) => () // ok - now has 5 fields (compute, tag, storage, retryPolicy, sourcePos)
       case _ => fail("Expected Activity(...)")
   }
 
@@ -119,6 +119,6 @@ class DurableBasicTest extends FunSuite:
 
     // Just verify it compiles and creates a FlatMap chain
     durable match
-      case Durable.FlatMap(Durable.Activity(_, _, _, _), _) => () // ok
+      case Durable.FlatMap(Durable.Activity(_, _, _, _, _), _) => () // ok
       case _ => fail("Expected FlatMap(Activity(...), ...)")
   }

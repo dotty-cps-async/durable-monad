@@ -13,8 +13,10 @@ import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
  */
 class MonadConversionTest extends FunSuite:
 
+  import scala.concurrent.ExecutionContext.Implicits.global
   import MemoryBackingStore.given
   given backend: MemoryBackingStore = MemoryBackingStore()
+  private val runner = WorkflowSessionRunner.forFuture
   // CpsMonadConversion[Future, Durable] is provided by MemoryBackingStore companion
 
   test("Future.await inside async[Durable] compiles and creates correct structure") {
@@ -27,7 +29,7 @@ class MonadConversionTest extends FunSuite:
 
     // Should create FlatMap(Activity(...), ...)
     durable match
-      case Durable.FlatMap(Durable.Activity(_, _, _, _), _) => () // ok
+      case Durable.FlatMap(Durable.Activity(_, _, _, _, _), _) => () // ok
       case other => fail(s"Expected FlatMap(Activity(...), ...), got: $other")
   }
 
@@ -43,7 +45,7 @@ class MonadConversionTest extends FunSuite:
 
     // Should be nested FlatMaps with Activities
     durable match
-      case Durable.FlatMap(Durable.Activity(_, _, _, _), _) => () // ok - first layer
+      case Durable.FlatMap(Durable.Activity(_, _, _, _, _), _) => () // ok - first layer
       case other => fail(s"Expected FlatMap structure, got: $other")
   }
 
@@ -64,7 +66,7 @@ class MonadConversionTest extends FunSuite:
     }
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)(using freshBackend)
-    WorkflowSessionRunner.run(durable, ctx).map { result =>
+    runner.run(durable, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, 43)
@@ -109,7 +111,7 @@ class MonadConversionTest extends FunSuite:
 
     // Resume from index 1 (after the cached activity)
     val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0)(using freshBackend)
-    WorkflowSessionRunner.run(durable, ctx).map { result =>
+    runner.run(durable, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>
           // Should use cached value 100 + 1 = 101

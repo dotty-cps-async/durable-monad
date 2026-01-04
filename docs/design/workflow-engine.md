@@ -26,12 +26,14 @@ WorkflowEngine is the orchestration layer that manages multiple concurrent workf
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**WorkflowSessionRunner** (keep unchanged):
-- Pure interpreter for `Durable[A]` monad
+**WorkflowSessionRunner[G[_]]** (generic over effect type):
+- Pure interpreter for `Durable[A]` monad, parameterized over effect `G`
 - Executes activities with caching and retry
-- Returns `WorkflowSessionResult[A]`: Completed, Suspended, Failed, ContinueAs
+- Returns `G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]]`
+- When activity requires "bigger" effect (e.g., IO when running in Future), returns `Left(NeedsBiggerRunner)`
 - Stateless beyond a single run (activity index counter)
 - No knowledge of other workflows or events
+- Factory: `WorkflowSessionRunner.forFuture` creates Future-based runner
 
 **WorkflowEngine** (new):
 - Manages collection of workflow instances
@@ -540,26 +542,36 @@ def recover(): Future[RecoveryReport] =
 
 ### Resume Flow
 
+`WorkflowSessionRunner[G[_]]` is generic over effect type. The engine uses `WorkflowSessionRunner.forFuture` and handles the `Either[NeedsBiggerRunner, WorkflowSessionResult[A]]` return type:
+
 ```scala
+private val futureRunner = WorkflowSessionRunner.forFuture
+
 private def runWorkflow[A](
   workflowId: WorkflowId,
   workflow: Durable[A],
   resumeFrom: Int
 ): Future[Unit] =
   val ctx = WorkflowSessionRunner.RunContext(workflowId, resumeFrom, config)
-  WorkflowSessionRunner.run(workflow, ctx).flatMap {
-    case WorkflowResult.Completed(value) =>
+  futureRunner.run(workflow, ctx).flatMap {
+    case Right(WorkflowResult.Completed(value)) =>
       markSucceeded(workflowId, value)
 
-    case WorkflowResult.Suspended(snapshot, condition) =>
+    case Right(WorkflowResult.Suspended(snapshot, condition)) =>
       markSuspended(workflowId, snapshot, condition)
       registerWaiter(workflowId, condition)
 
-    case WorkflowResult.Failed(error) =>
+    case Right(WorkflowResult.Failed(error)) =>
       markFailed(workflowId, error)
 
-    case WorkflowResult.ContinueAs(metadata, storeArgs, workflow, backend) =>
+    case Right(WorkflowResult.ContinueAs(metadata, storeArgs, workflow, backend)) =>
       handleContinueAs(workflowId, metadata, storeArgs, workflow, backend)
+
+    case Left(needsBigger) =>
+      // Requires IO runner - need durable-ce3 dependency
+      Future.failed(RuntimeException(
+        s"Workflow requires effect ${needsBigger.activityTag} not supported by FutureRunner"
+      ))
   }
 ```
 

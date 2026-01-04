@@ -11,6 +11,7 @@ import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowSessionResul
 
 class CustomerOnboardingTest extends FunSuite:
   import MemoryBackingStore.given
+  private val runner = WorkflowSessionRunner.forFuture
 
   test("sends welcome email and suspends waiting for 2 days") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -34,7 +35,7 @@ class CustomerOnboardingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       // Should suspend at sleep
       assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]], s"Expected Suspended, got $result")
       val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
@@ -77,7 +78,7 @@ class CustomerOnboardingTest extends FunSuite:
     )
 
     backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>
-      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      runner.run(workflow, ctx).map(_.toOption.get).map { result =>
         result match
           case WorkflowSessionResult.Completed(_, value) =>
             assertEquals(value, OnboardingResult.ReminderSent)
@@ -120,7 +121,7 @@ class CustomerOnboardingTest extends FunSuite:
     )
 
     backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>
-      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      runner.run(workflow, ctx).map(_.toOption.get).map { result =>
         result match
           case WorkflowSessionResult.Completed(_, value) =>
             assertEquals(value, OnboardingResult.ActiveUser)

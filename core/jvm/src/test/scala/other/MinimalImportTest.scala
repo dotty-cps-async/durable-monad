@@ -21,6 +21,7 @@ class MinimalImportTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import MemoryBackingStore.given
+  private val runner = WorkflowSessionRunner.forFuture
 
   test("preprocessor works with import durable.Durable (not durable.*)") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -36,7 +37,7 @@ class MinimalImportTest extends FunSuite:
     }
 
     // First run - should compute and cache
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
       assertEquals(computeCount.get, 1)
       // Verify preprocessor cached the val as activity

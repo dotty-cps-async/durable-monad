@@ -11,6 +11,7 @@ import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowSessionResul
 
 class SubscriptionBillingTest extends FunSuite:
   import MemoryBackingStore.given
+  private val runner = WorkflowSessionRunner.forFuture
 
   test("first billing cycle charges and suspends for 30 days") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -35,7 +36,7 @@ class SubscriptionBillingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       // Should suspend at 30-day sleep
       assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]], s"Expected Suspended, got $result")
       val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
@@ -87,7 +88,7 @@ class SubscriptionBillingTest extends FunSuite:
     )
 
     backing.storeWinningCondition(workflowId, 5, TimerInstant(now)).flatMap { _ =>
-      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      runner.run(workflow, ctx).map(_.toOption.get).map { result =>
         result match
           case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
             assertEquals(metadata.functionName, "durable.examples.subscription.SubscriptionBillingWorkflow")
@@ -122,7 +123,7 @@ class SubscriptionBillingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.examples.subscription.SubscriptionRetryWorkflow")
@@ -159,7 +160,7 @@ class SubscriptionBillingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, SubscriptionResult.Cancelled(5))
@@ -194,7 +195,7 @@ class SubscriptionBillingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Suspended(_, condition) =>
           // Should suspend waiting for 1-day retry delay
@@ -236,7 +237,7 @@ class SubscriptionBillingTest extends FunSuite:
     )
 
     backing.storeWinningCondition(workflowId, 1, TimerInstant(now)).flatMap { _ =>
-      WorkflowSessionRunner.run(workflow, ctx).map { result =>
+      runner.run(workflow, ctx).map(_.toOption.get).map { result =>
         result match
           case WorkflowSessionResult.Suspended(_, condition) =>
             // After successful retry, should suspend waiting for remaining billing period
@@ -273,7 +274,7 @@ class SubscriptionBillingTest extends FunSuite:
       configSource = ConfigSource.empty
     )
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>
           value match

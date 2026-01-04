@@ -17,6 +17,7 @@ class DurableRawTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import MemoryBackingStore.given
+  private val runner = WorkflowSessionRunner.forFuture
 
   test("DurableRaw async - vals are NOT wrapped as activities") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -37,7 +38,7 @@ class DurableRawTest extends FunSuite:
     val workflow = makeWorkflow(() => computeCount += 1)
 
     // First run
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
       // The val computation happened during workflow construction
       assertEquals(computeCount, 1)
@@ -62,7 +63,7 @@ class DurableRawTest extends FunSuite:
     }.toDurable
 
     // First run
-    WorkflowSessionRunner.run(workflow, ctx).flatMap { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).flatMap { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 43))
       assertEquals(computeCount, 1)
       assertEquals(backing.size, 1, "Activity should be cached")
@@ -70,7 +71,7 @@ class DurableRawTest extends FunSuite:
       // Second run (replay) - x is replayed from cache
       computeCount = 0
       val ctx2 = WorkflowSessionRunner.RunContext.resume(WorkflowId("raw-explicit-1"), 1, 0)
-      WorkflowSessionRunner.run(workflow, ctx2).map { result2 =>
+      runner.run(workflow, ctx2).map(_.toOption.get).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(ctx.workflowId, 43))
         assertEquals(computeCount, 0, "With explicit activity, val is cached on replay")
       }
@@ -88,7 +89,7 @@ class DurableRawTest extends FunSuite:
       a + b
     }.toDurable
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, 30))
       assertEquals(backing.size, 2)
     }
@@ -122,7 +123,7 @@ class DurableRawTest extends FunSuite:
     assertEquals(computed, false)
 
     dr.toDurable match
-      case Durable.Activity(_, _, _, _) => ()
+      case Durable.Activity(_, _, _, _, _) => ()
       case _ => fail("Expected Activity")
   }
 
@@ -150,7 +151,7 @@ class DurableRawTest extends FunSuite:
 
       val workflowId = WorkflowId("compare-preprocessor")
       val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
-      WorkflowSessionRunner.run(workflowWithPreprocessor, ctx).map { _ =>
+      runner.run(workflowWithPreprocessor, ctx).map(_.toOption.get).map { _ =>
         // Preprocessor version caches the val as activity
         assert(backing.size > 0, "Preprocessor should create activities")
       }
@@ -171,7 +172,7 @@ class DurableRawTest extends FunSuite:
 
       val workflowId = WorkflowId("compare-raw")
       val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
-      WorkflowSessionRunner.run(workflowRaw, ctx).map { _ =>
+      runner.run(workflowRaw, ctx).map(_.toOption.get).map { _ =>
         // Raw version has no cached activities
         assertEquals(backing.size, 0, "Raw version should have no activities")
       }

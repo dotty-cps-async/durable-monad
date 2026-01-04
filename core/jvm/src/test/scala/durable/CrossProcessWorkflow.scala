@@ -43,8 +43,10 @@ object CrossProcessWorkflow extends DurableFunction1[String, String, JsonFileSto
  * Usage: ProcessA <storageDir> <workflowId> <input>
  */
 object ProcessA:
+
   def main(args: Array[String]): Unit =
     given ExecutionContext = ExecutionContext.global
+    val runner = WorkflowSessionRunner.forFuture
 
     val storageDir = Paths.get(args(0))
     val workflowId = WorkflowId(args(1))
@@ -63,7 +65,7 @@ object ProcessA:
     val workflow = CrossProcessWorkflow.apply(input)
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    val result = Await.result(WorkflowSessionRunner.run(workflow, ctx), 30.seconds)
+    val result = Await.result(runner.run(workflow, ctx).map(_.toOption.get), 30.seconds)
 
     result match
       case WorkflowSessionResult.Suspended(snapshot, condition) =>
@@ -81,11 +83,11 @@ object ProcessA:
 
         println(s"[ProcessA] Metadata saved. Exiting.")
 
-      case WorkflowSessionResult.Completed(_, value) =>
+      case WorkflowSessionResult.Completed(wid, value) =>
         println(s"[ProcessA] Workflow completed unexpectedly: $value")
         sys.exit(1)
 
-      case WorkflowSessionResult.Failed(_, error) =>
+      case WorkflowSessionResult.Failed(wid, error) =>
         println(s"[ProcessA] Workflow failed: ${error.getMessage}")
         sys.exit(1)
 
@@ -99,8 +101,10 @@ object ProcessA:
  * Usage: ProcessB <storageDir> <workflowId> <eventValue>
  */
 object ProcessB:
+
   def main(args: Array[String]): Unit =
     given ExecutionContext = ExecutionContext.global
+    val runner = WorkflowSessionRunner.forFuture
 
     val storageDir = Paths.get(args(0))
     val workflowId = WorkflowId(args(1))
@@ -157,10 +161,10 @@ object ProcessB:
 
     println(s"[ProcessB] Resuming workflow from index ${metadata.activityIndex + 1}")
 
-    val result = Await.result(WorkflowSessionRunner.run(workflow, ctx), 30.seconds)
+    val result = Await.result(runner.run(workflow, ctx).map(_.toOption.get), 30.seconds)
 
     result match
-      case WorkflowSessionResult.Completed(_, value) =>
+      case WorkflowSessionResult.Completed(wid, value) =>
         println(s"[ProcessB] Workflow completed: $value")
 
         // Update metadata
@@ -172,7 +176,7 @@ object ProcessB:
         println(s"[ProcessB] Workflow suspended again at index ${snapshot.activityIndex}")
         sys.exit(1)
 
-      case WorkflowSessionResult.Failed(_, error) =>
+      case WorkflowSessionResult.Failed(wid, error) =>
         println(s"[ProcessB] Workflow failed: ${error.getMessage}")
         error.printStackTrace()
         sys.exit(1)

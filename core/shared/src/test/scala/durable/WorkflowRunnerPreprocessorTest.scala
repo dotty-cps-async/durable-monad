@@ -20,6 +20,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
   import MemoryBackingStore.given
+  private val runner = WorkflowSessionRunner.forFuture
 
   test("async[Durable] - pure value") {
     given backing: MemoryBackingStore = MemoryBackingStore()
@@ -30,7 +31,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       42
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
     }
   }
@@ -51,7 +52,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
     var executeCount = 0
     val workflow = makeWorkflow(() => executeCount += 1)
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assert(backing.size > 0, "Preprocessor should cache val as activity")
     }
@@ -73,7 +74,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       x
     }
 
-    WorkflowSessionRunner.run(makeWorkflow(() => executeCount += 1), ctx1).flatMap { result1 =>
+    runner.run(makeWorkflow(() => executeCount += 1), ctx1).map(_.toOption.get).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(executeCount, 1)
       val cachedCount = backing.size
@@ -81,7 +82,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       // Second run - replay from cache
       executeCount = 0
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount, 0)
-      WorkflowSessionRunner.run(makeWorkflow(() => executeCount += 1), ctx2).map { result2 =>
+      runner.run(makeWorkflow(() => executeCount += 1), ctx2).map(_.toOption.get).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
         assertEquals(executeCount, 0, "Should not re-execute on replay")
       }
@@ -105,7 +106,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       a + b + c
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(aCount, 1)
       assertEquals(bCount, 1)
@@ -127,7 +128,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
     // First run
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
-    WorkflowSessionRunner.run(makeWorkflow(getCond), ctx1).flatMap { result1 =>
+    runner.run(makeWorkflow(getCond), ctx1).map(_.toOption.get).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(condCount, 1)
       val cachedCount = backing.size
@@ -135,7 +136,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       // Replay - condition should be cached
       condCount = 0
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount, 0)
-      WorkflowSessionRunner.run(makeWorkflow(getCond), ctx2).map { result2 =>
+      runner.run(makeWorkflow(getCond), ctx2).map(_.toOption.get).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, 42))
         assertEquals(condCount, 0, "Condition should be replayed from cache")
       }
@@ -158,7 +159,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
 
     // First run
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
-    WorkflowSessionRunner.run(makeWorkflow(getScrutinee), ctx1).flatMap { result1 =>
+    runner.run(makeWorkflow(getScrutinee), ctx1).map(_.toOption.get).flatMap { result1 =>
       assertEquals(result1, WorkflowSessionResult.Completed(workflowId, "two"))
       assertEquals(scrutineeCount, 1)
       val cachedCount = backing.size
@@ -166,7 +167,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       // Replay - scrutinee should be cached
       scrutineeCount = 0
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, cachedCount, 0)
-      WorkflowSessionRunner.run(makeWorkflow(getScrutinee), ctx2).map { result2 =>
+      runner.run(makeWorkflow(getScrutinee), ctx2).map(_.toOption.get).map { result2 =>
         assertEquals(result2, WorkflowSessionResult.Completed(workflowId, "two"))
         assertEquals(scrutineeCount, 0, "Scrutinee should be replayed from cache")
       }
@@ -188,7 +189,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       x
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(executeCount, 1)
     }
@@ -208,7 +209,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       }
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, -1))
     }
   }
@@ -231,7 +232,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       a + b
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
       assertEquals(outerCount, 1)
       assertEquals(innerCount, 1)
@@ -254,7 +255,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       a + b
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]])
       assertEquals(beforeCount, 1)
       val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
@@ -278,7 +279,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       a + signal.length
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assert(result.isInstanceOf[WorkflowSessionResult.Suspended[?]])
       val suspended = result.asInstanceOf[WorkflowSessionResult.Suspended[?]]
       assert(suspended.condition.hasEvent("new-syntax-signal"), "Expected Event condition with new-syntax-signal")
@@ -299,7 +300,7 @@ class WorkflowSessionRunnerPreprocessorTest extends FunSuite:
       c
     }
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, 30)) // 10 + 20 = 30
     }
   }

@@ -8,6 +8,8 @@ import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult, WorkflowMet
 
 class ContinueAsTest extends FunSuite:
 
+  private val runner = WorkflowSessionRunner.forFuture
+
   // Test workflows using unified DurableFunction[Args, R, S]
   import MemoryBackingStore.given
 
@@ -42,7 +44,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = CounterWorkflow(3)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-continue-as-1"))
 
-    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
+    val result = runner.run(workflow, ctx).value.get.get.toOption.get
 
     result match
       case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
@@ -59,7 +61,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = TransitionWorkflow(5)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-transition-1"))
 
-    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
+    val result = runner.run(workflow, ctx).value.get.get.toOption.get
 
     result match
       case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
@@ -77,7 +79,7 @@ class ContinueAsTest extends FunSuite:
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
     for
-      result <- WorkflowSessionRunner.run(workflow, ctx)
+      result <- runner.run(workflow, ctx).map(_.toOption.get)
       _ <- result match
         case WorkflowSessionResult.ContinueAs(_, storeArgs, _) =>
           for
@@ -95,7 +97,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = CounterWorkflow(0)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-complete-1"))
 
-    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
+    val result = runner.run(workflow, ctx).value.get.get.toOption.get
 
     result match
       case WorkflowSessionResult.Completed(_, value) =>
@@ -164,7 +166,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = CountdownWithPreprocessor(3)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-countdown-preprocessor"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.CountdownWithPreprocessor")
@@ -180,7 +182,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = CountdownWithPreprocessor(0)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-countdown-zero"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, 0)
@@ -211,7 +213,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = AccumulatorWorkflow(3, 0)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-accumulator"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.ContinueAs(metadata, _, nextWorkflow) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.AccumulatorWorkflow")
@@ -246,7 +248,7 @@ class ContinueAsTest extends FunSuite:
     val workflowId = WorkflowId("test-process-continue")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.ContinueAs(metadata, storeArgs, _) =>
           // Verify activities were cached (preprocessor wraps multiple vals)
@@ -265,7 +267,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = ProcessAndContinue(0)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-process-complete"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, "step-0")
@@ -293,7 +295,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = ExplicitTupleWorkflow(2)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-explicit-tuple"))
 
-    val result = WorkflowSessionRunner.run(workflow, ctx).value.get.get
+    val result = runner.run(workflow, ctx).value.get.get.toOption.get
 
     result match
       case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
@@ -327,7 +329,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = HandoffWorkflow(5)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-handoff"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")
@@ -343,7 +345,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = HandoffWorkflow(0)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-no-handoff"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.Completed(_, value) =>
           assertEquals(value, "no-handoff")
@@ -378,7 +380,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = StateA(10)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-state-machine"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.StateB")
@@ -408,7 +410,7 @@ class ContinueAsTest extends FunSuite:
     val workflow = TraitMethodWorkflow(3)
     val ctx = WorkflowSessionRunner.RunContext.fresh(WorkflowId("test-trait-method"))
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       result match
         case WorkflowSessionResult.ContinueAs(metadata, _, _) =>
           assertEquals(metadata.functionName, "durable.ContinueAsTest.SwitchWorkflow")

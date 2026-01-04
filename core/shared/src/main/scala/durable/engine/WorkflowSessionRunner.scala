@@ -1,12 +1,14 @@
 package durable.engine
 
-import scala.concurrent.{Future, ExecutionContext, Promise}
+import scala.concurrent.{Future, ExecutionContext}
 import scala.concurrent.duration.*
 import scala.util.{Try, Success, Failure}
 import scala.util.control.NonFatal
 
+import cps.*
+import cps.monads.CpsIdentity
 import durable.*
-import durable.runtime.Scheduler
+import durable.runtime.{Scheduler, EffectTag}
 import com.github.rssh.appcontext.*
 
 /**
@@ -31,94 +33,114 @@ private[engine] enum StackFrame:
   )
 
 /**
- * Interpreter for Durable Free Monad.
+ * Signal that the runner needs to switch to a "bigger" effect.
  *
- * Runs a workflow step by step, handling:
- *   - Pure values
- *   - FlatMap sequencing
- *   - Errors
- *   - Local computations (sync, no cache)
- *   - Activity (async, cached with runtime index assignment)
- *   - Suspend (external calls)
+ * This happens when:
+ * - Current runner (e.g., Future) encounters Activity[IO]
+ * - Future can't convert IO → Future
+ * - But IO CAN convert Future → IO (IO is "bigger")
+ * - Engine should switch to IO runner and resume from saved state
  *
- * Activity indices are assigned at runtime as the interpreter
- * encounters Activity nodes. This ensures deterministic
- * replay: same execution path = same indices.
- *
- * Each Activity captures its own DurableStorage, so the runner
- * doesn't need storage - it only needs workflowId and resumeFromIndex.
+ * @param activityTag The effect tag of the activity that triggered the switch
+ * @param state Saved interpreter state for resumption
  */
-object WorkflowSessionRunner:
+case class NeedsBiggerRunner(
+  activityTag: EffectTag[?],
+  state: RunnerState
+)
+
+/**
+ * Saved interpreter state for runner switching.
+ *
+ * When a runner can't handle an activity but a "bigger" runner can,
+ * it saves its state so the bigger runner can resume from the exact
+ * point where switching was needed.
+ *
+ * @param currentNode The Durable node being interpreted when switch was triggered
+ * @param stack The continuation stack (FlatMap continuations, TryHandlers, etc.)
+ * @param activityIndex Current activity index (for deterministic replay)
+ * @param ctx The run context
+ */
+case class RunnerState(
+  currentNode: Durable[?],
+  stack: List[StackFrame],
+  activityIndex: Int,
+  ctx: WorkflowSessionRunner.RunContext
+)
+
+/**
+ * Generic interpreter for Durable workflows.
+ *
+ * Parameterized over effect type G[_] with CpsAsyncMonad instance.
+ * Uses monad operations for sequencing and adoptCallbackStyle for lifting Futures.
+ *
+ * Returns G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]]:
+ * - Right(result): Workflow completed/suspended/failed
+ * - Left(needsBigger): Need to switch to a bigger runner
+ *
+ * Effect hierarchy: IO > Future > CpsIdentity
+ *
+ * @tparam G The target effect type
+ * @param targetTag Effect tag for G (determines what activities can be handled)
+ * @param monad CpsAsyncMonad instance for G
+ */
+class WorkflowSessionRunner[G[_]](
+  val targetTag: EffectTag[G]
+)(using val monad: CpsAsyncMonad[G]):
+  import WorkflowSessionRunner.*
+
+  /**
+   * Lift a Future[A] into G[A].
+   * Uses monad.adoptCallbackStyle to convert callback-based Future to G.
+   */
+  def liftFuture[A](fa: Future[A]): G[A] =
+    monad.adoptCallbackStyle[A](callback => fa.onComplete(callback)(ExecutionContext.parasitic))
 
   /**
    * Run a workflow to completion or suspension.
    *
    * @param workflow The Durable workflow to run
    * @param ctx The execution context (workflowId, replay state)
-   * @return WorkflowSessionResult - Completed, Suspended, or Failed
+   * @return G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]]
    */
   def run[A](
     workflow: Durable[A],
     ctx: RunContext
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     val state = new InterpreterState(ctx.resumeFromIndex, ctx.activityOffset)
-    stepsUntilSuspend[A](workflow, ctx, state, Nil)
+    interpret[A](workflow, ctx, state, Nil)
 
   /**
-   * Mutable interpreter state for tracking activity index at runtime.
+   * Resume interpretation from a saved state (after runner switch).
    *
-   * Activity indices are assigned sequentially starting from activityOffset.
-   * This allows the engine to store args at indices 0..argCount-1,
-   * and activities start at argCount.
-   *
-   * For replay:
-   * - resumeFromIndex indicates the first index to execute fresh
-   * - indices < resumeFromIndex are replayed from cache
-   * - indices >= resumeFromIndex are executed fresh
-   *
-   * @param resumeFromIndex First index to execute fresh (indices below are replayed)
-   * @param activityOffset Starting index for activities (to skip over stored args)
+   * @param savedState Saved state from the previous runner
+   * @return G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]]
    */
-  private class InterpreterState(val resumeFromIndex: Int, val activityOffset: Int = 0):
-    // Start current index at activityOffset (default 0 for direct runner use)
-    private var _currentIndex: Int = activityOffset
-
-    /** Get current index and increment for next activity */
-    def nextIndex(): Int =
-      val idx = _currentIndex
-      _currentIndex += 1
-      idx
-
-    /** Current index (for snapshot) */
-    def currentIndex: Int = _currentIndex
-
-    /** Are we replaying at this index? */
-    def isReplayingAt(index: Int): Boolean =
-      index < resumeFromIndex
+  def resumeFrom[A](
+    savedState: RunnerState
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
+    val state = new InterpreterState(savedState.ctx.resumeFromIndex, savedState.ctx.activityOffset)
+    state.setIndex(savedState.activityIndex)
+    interpret[A](savedState.currentNode.asInstanceOf[Durable[A]], savedState.ctx, state, savedState.stack)
 
   /**
    * Execute workflow steps until completion, suspension, or failure.
-   *
-   * @param current Current Durable node to interpret
-   * @param ctx Execution context
-   * @param state Interpreter state (tracks activity index)
-   * @param stack Continuation stack (StackFrame for FlatMap and FlatMapTry)
    */
-  private def stepsUntilSuspend[A](
+  private def interpret[A](
     current: Durable[?],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     current match
       case Durable.Pure(value) =>
         continueWith(Success(value), ctx, state, stack)
 
       case Durable.FlatMap(fa, f) =>
-        stepsUntilSuspend(fa, ctx, state, StackFrame.Cont(f.asInstanceOf[Any => Durable[?]]) :: stack)
+        interpret(fa, ctx, state, StackFrame.Cont(f.asInstanceOf[Any => Durable[?]]) :: stack)
 
       case Durable.FlatMapTry(fa, f) =>
-        stepsUntilSuspend(fa, ctx, state, StackFrame.TryHandler(f.asInstanceOf[Try[Any] => Durable[?]]) :: stack)
+        interpret(fa, ctx, state, StackFrame.TryHandler(f.asInstanceOf[Try[Any] => Durable[?]]) :: stack)
 
       case fmc: Durable.FlatMapCached[a, b, s] =>
         handleFlatMapCached[A, a, b, s](fmc, ctx, state, stack)
@@ -133,8 +155,8 @@ object WorkflowSessionRunner:
           case None =>
             handleLocalComputation(localComp.compute.asInstanceOf[RunContext => Any], ctx, state, stack)
 
-      case activity: Durable.Activity[b, s] =>
-        handleActivity[A, b, s](activity, ctx, state, stack)
+      case activity: Durable.Activity[f, b, s] =>
+        handleActivity[A, f, b, s](activity, ctx, state, stack)
 
       case asyncActivity: Durable.AsyncActivity[f, t, s] =>
         handleAsyncActivity[A, f, t, s](asyncActivity, ctx, state, stack)
@@ -146,110 +168,83 @@ object WorkflowSessionRunner:
         handleSuspend[A, a, s](suspend, ctx, state, stack)
 
       case continueAs: Durable.ContinueAs[a] =>
-        // ContinueAs is a terminal operation - return result for engine to handle
-        // Type a = A by GADT refinement, cast is safe
-        Future.successful(WorkflowSessionResult.ContinueAs(
+        monad.pure(Right(WorkflowSessionResult.ContinueAs(
           continueAs.metadata,
           continueAs.storeArgs,
           continueAs.workflow
-        ).asInstanceOf[WorkflowSessionResult[A]])
+        ).asInstanceOf[WorkflowSessionResult[A]]))
 
       case wr: Durable.WithSessionResource[r, b] =>
         handleWithSessionResource[A, r, b](wr, ctx, state, stack)
 
   /**
    * Continue with a result (success or failure), applying the next continuation from the stack.
-   * Handles error unwinding - failures skip Cont frames until a TryHandler is found.
    */
   private def continueWith[A](
     result: Try[Any],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     (result, stack) match
-      // End of stack with success
       case (Success(value), Nil) =>
-        Future.successful(WorkflowSessionResult.Completed(ctx.workflowId, value.asInstanceOf[A]))
+        monad.pure(Right(WorkflowSessionResult.Completed(ctx.workflowId, value.asInstanceOf[A])))
 
-      // End of stack with failure - workflow fails (wrap in ReplayedException for consistent API)
       case (Failure(error), Nil) =>
         val wrapped = error match
           case re: ReplayedException => re
           case e => ReplayedException(e)
-        Future.successful(WorkflowSessionResult.Failed(ctx.workflowId, wrapped))
+        monad.pure(Right(WorkflowSessionResult.Failed(ctx.workflowId, wrapped)))
 
-      // Success through normal continuation
       case (Success(value), StackFrame.Cont(f) :: rest) =>
-        try
-          val next = f(value)
-          stepsUntilSuspend(next, ctx, state, rest)
-        catch
-          case NonFatal(e) =>
-            continueWith(Failure(e), ctx, state, rest)
+        monad.flatMapTry(monad.tryPure(f(value))) {
+          case Success(next) => interpret(next, ctx, state, rest)
+          case Failure(e) => continueWith(Failure(e), ctx, state, rest)
+        }
 
-      // Success through try handler - passes Success(value)
       case (Success(value), StackFrame.TryHandler(f) :: rest) =>
-        try
-          val next = f(Success(value))
-          stepsUntilSuspend(next, ctx, state, rest)
-        catch
-          case NonFatal(e) =>
-            continueWith(Failure(e), ctx, state, rest)
+        monad.flatMapTry(monad.tryPure(f(Success(value)))) {
+          case Success(next) => interpret(next, ctx, state, rest)
+          case Failure(e) => continueWith(Failure(e), ctx, state, rest)
+        }
 
-      // Error skips normal continuations (unwinding)
       case (Failure(error), StackFrame.Cont(_) :: rest) =>
         continueWith(Failure(error), ctx, state, rest)
 
-      // Error caught by try handler - passes Failure(error)
       case (Failure(error), StackFrame.TryHandler(f) :: rest) =>
-        try
-          val next = f(Failure(error))
-          stepsUntilSuspend(next, ctx, state, rest)
-        catch
-          case NonFatal(e) =>
-            continueWith(Failure(e), ctx, state, rest)
+        monad.flatMapTry(monad.tryPure(f(Failure(error)))) {
+          case Success(next) => interpret(next, ctx, state, rest)
+          case Failure(e) => continueWith(Failure(e), ctx, state, rest)
+        }
 
-      // Success through cached continuation - run f(value), then cache result
       case (Success(value), StackFrame.ContCached(f, index, storage) :: rest) =>
-        try
-          val next = f(value)
-          // Push CacheResult frame to cache when f(value) completes
-          stepsUntilSuspend(next, ctx, state, StackFrame.CacheResult(index, storage) :: rest)
-        catch
-          case NonFatal(e) =>
+        monad.flatMapTry(monad.tryPure(f(value))) {
+          case Success(next) =>
+            interpret(next, ctx, state, StackFrame.CacheResult(index, storage) :: rest)
+          case Failure(e) =>
             continueWith(Failure(e), ctx, state, rest)
+        }
 
-      // Error skips cached continuation (unwinding) - but still need to handle caching failure
       case (Failure(error), StackFrame.ContCached(_, index, storage) :: rest) =>
-        // Cache the failure, then continue unwinding
-        storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+        val storeFuture = storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
           .storeStepFailure(ctx.backend, ctx.workflowId, index, StoredFailure.fromThrowable(error))
-          .flatMap { _ =>
-            continueWith(Failure(error), ctx, state, rest)
-          }.recoverWith { case e =>
-            continueWith(Failure(e), ctx, state, rest)
-          }
+        monad.flatMap(liftFuture(storeFuture)) { _ =>
+          continueWith(Failure(error), ctx, state, rest)
+        }
 
-      // CacheResult frame - cache the value and continue
       case (Success(value), StackFrame.CacheResult(index, storage) :: rest) =>
-        storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+        val storeFuture = storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
           .storeStep(ctx.backend, ctx.workflowId, index, value)
-          .flatMap { _ =>
-            continueWith(Success(value), ctx, state, rest)
-          }.recoverWith { case e =>
-            continueWith(Failure(e), ctx, state, rest)
-          }
+        monad.flatMap(liftFuture(storeFuture)) { _ =>
+          continueWith(Success(value), ctx, state, rest)
+        }
 
-      // CacheResult with failure - cache the failure and continue unwinding
       case (Failure(error), StackFrame.CacheResult(index, storage) :: rest) =>
-        storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+        val storeFuture = storage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
           .storeStepFailure(ctx.backend, ctx.workflowId, index, StoredFailure.fromThrowable(error))
-          .flatMap { _ =>
-            continueWith(Failure(error), ctx, state, rest)
-          }.recoverWith { case e =>
-            continueWith(Failure(e), ctx, state, rest)
-          }
+        monad.flatMap(liftFuture(storeFuture)) { _ =>
+          continueWith(Failure(error), ctx, state, rest)
+        }
 
   /**
    * Handle local computation - just execute, no caching.
@@ -259,21 +254,14 @@ object WorkflowSessionRunner:
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
-    try
-      val result = compute(ctx)
-      continueWith(Success(result), ctx, state, stack)
-    catch
-      case NonFatal(e) =>
-        continueWith(Failure(e), ctx, state, stack)
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
+    monad.flatMapTry(monad.tryPure(compute(ctx))) {
+      case Success(result) => continueWith(Success(result), ctx, state, stack)
+      case Failure(e) => continueWith(Failure(e), ctx, state, stack)
+    }
 
   /**
    * Handle cached local computation - assign index, check cache, execute and cache if needed.
-   * Similar to handleActivity but for sync local computations with context access.
-   *
-   * @tparam A Final workflow result type
-   * @tparam B Local computation result type
-   * @tparam S Storage backend type
    */
   private def handleCachedLocalComputation[A, B, S <: DurableStorageBackend](
     compute: RunContext => B,
@@ -282,56 +270,46 @@ object WorkflowSessionRunner:
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     val backend = ctx.backend.asInstanceOf[S]
-    // Assign index at runtime
     val index = state.nextIndex()
 
-    // Trace local computation if enabled
     if ctx.config.traceEnabled then
       val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
       println(s"[TRACE] LocalComputation #$index at $sourcePos: $mode")
 
     if state.isReplayingAt(index) then
-      // Replaying - retrieve from cache (success or failure)
-      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
+      monad.flatMap(liftFuture(storage.retrieveStep(backend, ctx.workflowId, index))) {
         case Some(Right(cached)) =>
-          // Cached success
           continueWith(Success(cached), ctx, state, stack)
         case Some(Left(storedFailure)) =>
-          // Cached failure - replay as ReplayedException
           continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
         case None =>
-          // Should not happen during replay - missing cached result
           continueWith(Failure(RuntimeException(
             s"Missing cached result for local computation at index=$index during replay"
           )), ctx, state, stack)
       }
     else
-      // Not replaying - execute and cache
-      try
-        val result = compute(ctx)
-        storage.storeStep(backend, ctx.workflowId, index, result).flatMap { _ =>
-          continueWith(Success(result), ctx, state, stack)
-        }
-      catch
-        case NonFatal(e) =>
-          // Store the failure for deterministic replay
-          storage.storeStepFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)).flatMap { _ =>
+      monad.flatMapTry(monad.tryPure(compute(ctx))) {
+        case Success(result) =>
+          monad.flatMap(liftFuture(storage.storeStep(backend, ctx.workflowId, index, result))) { _ =>
+            continueWith(Success(result), ctx, state, stack)
+          }
+        case Failure(e) =>
+          monad.flatMap(liftFuture(storage.storeStepFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)))) { _ =>
             continueWith(Failure(e), ctx, state, stack)
           }
+      }
 
   /**
    * Handle FlatMapCached - assign index, check cache, skip inner computation if cached.
-   * On replay: if cached, returns cached result without executing fa or f
-   * On first run: pushes ContCached frame and continues with fa
    */
   private def handleFlatMapCached[A, X, B, S <: DurableStorageBackend](
     fmc: Durable.FlatMapCached[X, B, S],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     val storage = fmc.storage
     val backend = ctx.backend.asInstanceOf[S]
     val index = state.nextIndex()
@@ -341,8 +319,7 @@ object WorkflowSessionRunner:
       println(s"[TRACE] FlatMapCached #$index at ${fmc.sourcePos}: $mode")
 
     if state.isReplayingAt(index) then
-      // Short-circuit! Get cached result without executing fa or f
-      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
+      monad.flatMap(liftFuture(storage.retrieveStep(backend, ctx.workflowId, index))) {
         case Some(Right(cached)) =>
           continueWith(Success(cached), ctx, state, stack)
         case Some(Left(storedFailure)) =>
@@ -351,146 +328,212 @@ object WorkflowSessionRunner:
           continueWith(Failure(RuntimeException(
             s"Missing cached result for FlatMapCached at index=$index during replay"
           )), ctx, state, stack)
-      }.recoverWith { case e =>
-        continueWith(Failure(e), ctx, state, stack)
       }
     else
-      // First run: push ContCached frame to cache f(a) result, continue with fa
-      stepsUntilSuspend(fmc.fa, ctx, state,
+      interpret(fmc.fa, ctx, state,
         StackFrame.ContCached(fmc.f.asInstanceOf[Any => Durable[?]], index, storage) :: stack)
 
   /**
-   * Handle Activity - assign index, check cache, execute if needed with retry, cache result.
-   * Uses the DurableStorage and RetryPolicy captured in the Activity node.
-   * Type parameter B is the activity's result type, A is the final workflow result type.
-   * Type parameter S is the storage backend type.
+   * Handle Activity - the key method for effect handling.
    *
-   * Both successes and failures are cached for deterministic replay.
-   * On replay, failures are returned as ReplayedException.
+   * If targetTag can accept the activity's effect → convert and execute.
+   * If not, but activity's effect can accept targetTag → return NeedsBiggerRunner.
+   * Otherwise → error.
    */
-  private def handleActivity[A, B, S <: DurableStorageBackend](
-    activity: Durable.Activity[B, S],
+  private def handleActivity[A, F[_], B, S <: DurableStorageBackend](
+    activity: Durable.Activity[F, B, S],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
-    val compute = activity.compute
-    val storage = activity.storage
-    val policy = activity.retryPolicy
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
+    val tag = activity.tag
+
+    targetTag.conversionFrom[F](tag) match
+      case Some(conversion) =>
+        // We can handle it - proceed with execution
+        val index = state.nextIndex()
+
+        if ctx.config.traceEnabled then
+          val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
+          println(s"[TRACE] Activity #$index at ${activity.sourcePos}: $mode (effect: ${tag.getClass.getSimpleName})")
+
+        if state.isReplayingAt(index) then
+          handleActivityReplay(activity.storage, index, ctx, state, stack)
+        else
+          handleActivityExecution(activity.compute, conversion, activity.storage, activity.retryPolicy,
+            index, ctx, state, stack)
+
+      case None =>
+        // Can't handle - check if activity's effect can accept our target (i.e., it's "bigger")
+        if tag.canAcceptErased(targetTag) then
+          // Activity's effect is bigger - need to switch runners
+          val savedState = RunnerState(
+            currentNode = activity,
+            stack = stack,
+            activityIndex = state.currentIndex,
+            ctx = ctx
+          )
+          monad.pure(Left(NeedsBiggerRunner(tag, savedState)))
+        else
+          // Incompatible effects
+          monad.pure(Right(WorkflowSessionResult.Failed(
+            ctx.workflowId,
+            ReplayedException(new RuntimeException(
+              s"Cannot handle effect ${tag} - not compatible with ${targetTag} and not a bigger effect"
+            ))
+          )))
+
+  private def handleActivityReplay[A, B, S <: DurableStorageBackend](
+    storage: DurableStorage[B, S],
+    index: Int,
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     val backend = ctx.backend.asInstanceOf[S]
-    // Assign index at runtime
-    val index = state.nextIndex()
+    monad.flatMap(liftFuture(storage.retrieveStep(backend, ctx.workflowId, index))) {
+      case Some(Right(cached)) =>
+        continueWith(Success(cached), ctx, state, stack)
+      case Some(Left(storedFailure)) =>
+        continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
+      case None =>
+        continueWith(Failure(RuntimeException(
+          s"Missing cached result for activity at index=$index during replay"
+        )), ctx, state, stack)
+    }
 
-    // Trace activity execution if enabled
-    if ctx.config.traceEnabled then
-      val mode = if state.isReplayingAt(index) then "REPLAY" else "EXECUTE"
-      println(s"[TRACE] Activity #$index at ${activity.sourcePos}: $mode")
+  private def handleActivityExecution[A, F[_], B, S <: DurableStorageBackend](
+    compute: () => F[B],
+    conversion: CpsMonadConversion[F, G],
+    storage: DurableStorage[B, S],
+    policy: RetryPolicy,
+    index: Int,
+    ctx: RunContext,
+    state: InterpreterState,
+    stack: List[StackFrame]
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
+    val backend = ctx.backend.asInstanceOf[S]
 
-    if state.isReplayingAt(index) then
-      // Replaying - retrieve from cache (success or failure)
-      storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
-        case Some(Right(cached)) =>
-          // Cached success
-          continueWith(Success(cached), ctx, state, stack)
-        case Some(Left(storedFailure)) =>
-          // Cached failure - replay as ReplayedException
-          continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
-        case None =>
-          continueWith(Failure(
-            RuntimeException(s"Missing cached result for activity at index=$index during replay")
-          ), ctx, state, stack)
-      }.recoverWith { case e =>
-        continueWith(Failure(e), ctx, state, stack)
-      }
-    else
-      // Execute activity with retry logic, cache result (success or failure), continue
-      executeWithRetry(compute, policy, ctx, index).transformWith {
-        case Success(result) =>
-          // Store success - if storage fails, fail workflow (no retry on storage)
-          storage.storeStep(backend, ctx.workflowId, index, result).flatMap { _ =>
-            continueWith(Success(result), ctx, state, stack)
-          }
-        case Failure(e) =>
-          // Store failure for deterministic replay
-          storage.storeStepFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)).flatMap { _ =>
-            continueWith(Failure(e), ctx, state, stack)
-          }
-      }.recoverWith { case e =>
-        // Storage operation itself failed
-        continueWith(Failure(e), ctx, state, stack)
-      }
+    // Thunk that creates G[B] fresh each attempt - needed for retry to re-execute
+    val computeG: () => G[B] = () => monad.flatWrap(conversion(compute()))
+
+    // Execute with retry logic
+    monad.flatMapTry(executeWithRetry(computeG, policy, ctx, index)) {
+      case Success(result) =>
+        monad.flatMap(liftFuture(storage.storeStep(backend, ctx.workflowId, index, result))) { _ =>
+          continueWith(Success(result), ctx, state, stack)
+        }
+      case Failure(e) =>
+        monad.flatMap(liftFuture(storage.storeStepFailure(backend, ctx.workflowId, index, StoredFailure.fromThrowable(e)))) { _ =>
+          continueWith(Failure(e), ctx, state, stack)
+        }
+    }
+
+  private def executeWithRetry[B](
+    computeG: () => G[B],
+    policy: RetryPolicy,
+    ctx: RunContext,
+    activityIndex: Int
+  ): G[B] =
+    def attempt(attemptNum: Int, lastError: Option[Throwable]): G[B] =
+      if attemptNum > policy.maxAttempts then
+        monad.error(lastError.getOrElse(
+          RuntimeException("Max retries exceeded with no error recorded")
+        ))
+      else
+        monad.flatMapTry(computeG()) {
+          case Success(value) =>
+            monad.pure(value)
+          case Failure(e) =>
+            val isRecoverable = policy.isRecoverable(e)
+            val hasMoreAttempts = attemptNum < policy.maxAttempts
+            val willRetry = isRecoverable && hasMoreAttempts
+
+            val nextDelayMs = if willRetry then
+              val baseDelay = policy.delayForAttempt(attemptNum)
+              val delayWithJitter = policy.applyJitter(baseDelay)
+              Some(delayWithJitter.toMillis)
+            else
+              None
+
+            val event = RetryEvent(
+              workflowId = ctx.workflowId,
+              activityIndex = activityIndex,
+              attempt = attemptNum,
+              maxAttempts = policy.maxAttempts,
+              error = e,
+              nextDelayMs = nextDelayMs,
+              willRetry = willRetry
+            )
+            ctx.config.retryLogger(event)
+
+            if willRetry then
+              val delayMs = nextDelayMs.getOrElse(0L)
+              val retryFuture = ctx.config.scheduler.schedule(delayMs.millis)(
+                Future.successful(())
+              )(using ExecutionContext.parasitic)
+              monad.flatMap(liftFuture(retryFuture)) { _ =>
+                attempt(attemptNum + 1, Some(e))
+              }
+            else
+              monad.error(e)
+        }
+
+    attempt(1, None)
 
   /**
    * Handle Suspend - assign index, check cache for replay, otherwise suspend.
-   * Uses storageForCondition to get the right storage based on which condition won.
-   * Type parameter S is the storage backend type.
-   *
-   * On replay (index < resumeFromIndex), the event value should be cached.
-   * On fresh run, we suspend and return the snapshot for later resumption.
    */
   private def handleSuspend[A, B, S <: DurableStorageBackend](
     suspend: Durable.Suspend[B, S],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     val condition = suspend.condition
     val backend = ctx.backend.asInstanceOf[S]
-    // Assign index at runtime (like Activity)
     val index = state.nextIndex()
 
     if state.isReplayingAt(index) then
-      // Replaying - look up which condition won, then retrieve value with that storage
-      backend.retrieveWinningCondition(ctx.workflowId, index).flatMap {
+      monad.flatMap(liftFuture(backend.retrieveWinningCondition(ctx.workflowId, index))) {
         case Some(winning) =>
           val storage = condition.storageForCondition(winning)
             .getOrElse(throw RuntimeException(s"No storage for winning condition $winning"))
-          storage.retrieveStep(backend, ctx.workflowId, index).flatMap {
+          monad.flatMap(liftFuture(storage.retrieveStep(backend, ctx.workflowId, index))) {
             case Some(Right(cached)) =>
-              // Cached event value - continue with it
               continueWith(Success(cached), ctx, state, stack)
             case Some(Left(storedFailure)) =>
-              // Cached failure - replay as ReplayedException
               continueWith(Failure(ReplayedException(storedFailure)), ctx, state, stack)
             case None =>
-              continueWith(Failure(
-                RuntimeException(s"Missing cached event value for suspend at index=$index during replay")
-              ), ctx, state, stack)
+              continueWith(Failure(RuntimeException(
+                s"Missing cached event value for suspend at index=$index during replay"
+              )), ctx, state, stack)
           }
         case None =>
-          continueWith(Failure(
-            RuntimeException(s"Missing winning condition for suspend at index=$index during replay")
-          ), ctx, state, stack)
-      }.recoverWith { case e =>
-        continueWith(Failure(e), ctx, state, stack)
+          continueWith(Failure(RuntimeException(
+            s"Missing winning condition for suspend at index=$index during replay"
+          )), ctx, state, stack)
       }
     else
-      // Fresh run - suspend and return snapshot
-      // The event value will be stored externally when the event occurs
-      Future.successful(WorkflowSessionResult.Suspended(
+      monad.pure(Right(WorkflowSessionResult.Suspended(
         DurableSnapshot(ctx.workflowId, index),
         condition
-      ))
+      )))
 
   /**
    * Handle AsyncActivity - assign index, delegate to DurableAsync.
-   * Returns F[T] immediately (parallel execution preserved).
-   * Type parameter F is the async effect type (e.g., Future).
-   * Type parameter T is the result type that gets cached.
-   * Type parameter S is the storage backend type.
    */
   private def handleAsyncActivity[A, F[_], T, S <: DurableStorageBackend](
     asyncActivity: Durable.AsyncActivity[F, T, S],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     val index = state.nextIndex()
     val backend = ctx.backend.asInstanceOf[S]
     given DurableStorage[T, S] = asyncActivity.storage
     given S = backend
 
-    // Wrapper handles all logic: cache check, execution with retry, caching on completion
     val resultF: F[T] = asyncActivity.wrapper.wrapCached(
       asyncActivity.compute,
       index,
@@ -501,145 +544,62 @@ object WorkflowSessionRunner:
       ctx.config.retryLogger
     )
 
-    // Continue IMMEDIATELY with F[T] (wrapper returns immediately)
     continueWith(Success(resultF), ctx, state, stack)
 
   /**
    * Handle LocalAsync - ephemeral async activity, NOT cached.
-   *
-   * Unlike AsyncActivity:
-   *   - Does NOT assign an index (not tracked in journal)
-   *   - Does NOT cache the result
-   *   - Just executes and returns F[T]
    */
   private def handleLocalAsync[A, F[_], T](
     localAsync: Durable.LocalAsync[F, T],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
-    // No index assignment, no caching - just execute
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
     val resultF: F[T] = localAsync.wrapper.wrapEphemeral(localAsync.compute, ctx)
-
-    // Continue IMMEDIATELY with F[T]
     continueWith(Success(resultF), ctx, state, stack)
 
   /**
    * Handle WithSessionResource - acquire resource, run inner workflow, release.
-   *
-   * Resource acquisition is NOT journaled because:
-   *   - Resources are ephemeral (connections, clients) and cannot be serialized
-   *   - On resume, resources must be acquired fresh
-   *   - Only the results of operations USING resources (activities) are cached
-   *
-   * The bracket pattern ensures release is called on success, failure, or suspension.
    */
   private def handleWithSessionResource[A, R, B](
     wr: Durable.WithSessionResource[R, B],
     ctx: RunContext,
     state: InterpreterState,
     stack: List[StackFrame]
-  )(using ec: ExecutionContext): Future[WorkflowSessionResult[A]] =
-    // No index increment - resource acquisition is NOT journaled
-    try
-      val resource = wr.acquire(ctx)
-      // Run inner workflow with resource
-      stepsUntilSuspend(wr.use(resource), ctx, state, stack).transform { result =>
-        // Release resource after workflow completes (success or failure)
-        try
-          wr.release(resource)
-        catch
-          case NonFatal(_) => () // Ignore release errors, preserve original result
-        result
-      }
-    catch
-      case NonFatal(e) =>
-        // Acquire failed - no resource to release, propagate error
-        continueWith(Failure(e), ctx, state, stack)
-
-  /**
-   * Execute activity computation with retry logic.
-   *
-   * @param compute The activity computation
-   * @param policy Retry policy to apply
-   * @param ctx Run context (for logging)
-   * @param activityIndex Activity index (for logging)
-   * @return Future containing the computation result
-   */
-  private def executeWithRetry[B](
-    compute: () => Future[B],
-    policy: RetryPolicy,
-    ctx: RunContext,
-    activityIndex: Int
-  )(using ec: ExecutionContext): Future[B] =
-
-    def attempt(attemptNum: Int, lastError: Option[Throwable]): Future[B] =
-      if attemptNum > policy.maxAttempts then
-        // Exhausted all retries
-        Future.failed(lastError.getOrElse(
-          RuntimeException("Max retries exceeded with no error recorded")
-        ))
-      else
-        compute().recoverWith { case e: Throwable =>
-          val isRecoverable = policy.isRecoverable(e)
-          val hasMoreAttempts = attemptNum < policy.maxAttempts
-          val willRetry = isRecoverable && hasMoreAttempts
-
-          // Calculate delay for next attempt (if any)
-          val nextDelayMs = if willRetry then
-            val baseDelay = policy.delayForAttempt(attemptNum)
-            val delayWithJitter = policy.applyJitter(baseDelay)
-            Some(delayWithJitter.toMillis)
-          else
-            None
-
-          // Log retry event
-          val event = RetryEvent(
-            workflowId = ctx.workflowId,
-            activityIndex = activityIndex,
-            attempt = attemptNum,
-            maxAttempts = policy.maxAttempts,
-            error = e,
-            nextDelayMs = nextDelayMs,
-            willRetry = willRetry
-          )
-          ctx.config.retryLogger(event)
-
-          if willRetry then
-            // Schedule retry after delay
-            val delayMs = nextDelayMs.getOrElse(0L)
-            scheduleRetry(delayMs.millis, ctx.config.scheduler) {
-              attempt(attemptNum + 1, Some(e))
-            }
-          else
-            // Not recoverable or exhausted retries
-            Future.failed(e)
+  ): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]] =
+    monad.flatMapTry(monad.tryPure(wr.acquire(ctx))) {
+      case Success(resource) =>
+        monad.withAsyncAction(interpret(wr.use(resource), ctx, state, stack)) {
+          monad.tryPure(wr.release(resource))
         }
+      case Failure(e) =>
+        continueWith(Failure(e), ctx, state, stack)
+    }
 
-    attempt(1, None)
+
+object WorkflowSessionRunner:
 
   /**
-   * Schedule a delayed retry using the configured scheduler.
+   * Mutable interpreter state for tracking activity index at runtime.
    */
-  private def scheduleRetry[B](
-    delay: FiniteDuration,
-    scheduler: Scheduler
-  )(f: => Future[B])(using ec: ExecutionContext): Future[B] =
-    if delay.toMillis <= 0 then
-      f
-    else
-      scheduler.schedule(delay)(f)
+  private[engine] class InterpreterState(val resumeFromIndex: Int, val activityOffset: Int = 0):
+    private var _currentIndex: Int = activityOffset
+
+    def nextIndex(): Int =
+      val idx = _currentIndex
+      _currentIndex += 1
+      idx
+
+    def currentIndex: Int = _currentIndex
+
+    def setIndex(idx: Int): Unit =
+      _currentIndex = idx
+
+    def isReplayingAt(index: Int): Boolean =
+      index < resumeFromIndex
 
   /**
    * Execution context for the workflow runner.
-   *
-   * @param workflowId Unique identifier for this workflow instance
-   * @param backend Storage backend instance (passed to storage typeclass methods)
-   * @param appContextCache Application context cache for environment resources (fresh on each start/resume)
-   * @param configSource Source for external configuration (database URLs, API keys, etc.)
-   * @param resumeFromIndex Activity index to resume from (0 = fresh start, indices < this are replayed)
-   * @param activityOffset Starting index for activity assignment (to skip stored args when run via engine)
-   * @param config Runner configuration (logging, scheduling)
    */
   case class RunContext(
     workflowId: WorkflowId,
@@ -652,34 +612,15 @@ object WorkflowSessionRunner:
   )
 
   object RunContext:
-    /** Create a fresh context for new workflow execution (uses empty ConfigSource - for testing) */
     def fresh(workflowId: WorkflowId)(using backend: DurableStorageBackend): RunContext =
       RunContext(workflowId, backend, AppContext.newCache, ConfigSource.empty, resumeFromIndex = 0)
 
-    /** Create a fresh context with custom run configuration and config source */
     def fresh(workflowId: WorkflowId, config: RunConfig, configSource: ConfigSource)(using backend: DurableStorageBackend): RunContext =
       RunContext(workflowId, backend, AppContext.newCache, configSource, resumeFromIndex = 0, config = config)
 
-    /** Create a fresh context with full custom configuration */
     def fresh(workflowId: WorkflowId, config: RunConfig, appContextCache: AppContext.Cache, configSource: ConfigSource)(using backend: DurableStorageBackend): RunContext =
       RunContext(workflowId, backend, appContextCache, configSource, resumeFromIndex = 0, config = config)
 
-    /**
-     * Create a context for resuming from a specific index.
-     *
-     * For DurableFunction workflows, activityOffset should equal argCount because:
-     * - Arguments are stored at indices 0..argCount-1
-     * - Activities should start at index argCount to avoid index conflicts
-     *
-     * For simple workflows without stored arguments, use activityOffset = 0.
-     *
-     * @param workflowId The workflow ID
-     * @param resumeFromIndex First index to execute fresh (indices below are replayed)
-     * @param activityOffset Starting index for activity numbering (argCount for DurableFunction, 0 for simple workflows)
-     * @param config Runtime configuration
-     * @param configSource Source for configuration values
-     * @param appContextCache Cache for AppContext
-     */
     def resume(
       workflowId: WorkflowId,
       resumeFromIndex: Int,
@@ -690,24 +631,15 @@ object WorkflowSessionRunner:
     )(using backend: DurableStorageBackend): RunContext =
       RunContext(workflowId, backend, appContextCache, configSource, resumeFromIndex, activityOffset, config)
 
-    /** Create a context for resuming from snapshot (uses empty ConfigSource - for testing) */
     def fromSnapshot(snapshot: DurableSnapshot)(using backend: DurableStorageBackend): RunContext =
       RunContext(snapshot.workflowId, backend, AppContext.newCache, ConfigSource.empty, snapshot.activityIndex)
 
-    /** Create a context for resuming from snapshot with custom run configuration and config source */
     def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig, configSource: ConfigSource)(using backend: DurableStorageBackend): RunContext =
       RunContext(snapshot.workflowId, backend, AppContext.newCache, configSource, snapshot.activityIndex, config = config)
 
-    /** Create a context for resuming from snapshot with full custom configuration */
     def fromSnapshot(snapshot: DurableSnapshot, config: RunConfig, appContextCache: AppContext.Cache, configSource: ConfigSource)(using backend: DurableStorageBackend): RunContext =
       RunContext(snapshot.workflowId, backend, appContextCache, configSource, snapshot.activityIndex, config = config)
 
-  /**
-   * Configuration for workflow runner.
-   *
-   * @param retryLogger Logger callback for retry events
-   * @param scheduler Scheduler for retry delays
-   */
   case class RunConfig(
     retryLogger: RetryLogger = RetryLogger.noop,
     scheduler: Scheduler = Scheduler.default,
@@ -715,16 +647,16 @@ object WorkflowSessionRunner:
   )
 
   object RunConfig:
-    /** Default configuration */
     val default: RunConfig = RunConfig()
 
-  /**
-   * Snapshot of workflow state for suspension and resumption.
-   *
-   * @param workflowId Unique identifier for the workflow instance
-   * @param activityIndex The activity index to resume from
-   */
   case class DurableSnapshot(
     workflowId: WorkflowId,
     activityIndex: Int
   )
+
+  /**
+   * Create a Future-based runner (default).
+   */
+  def forFuture(using ec: ExecutionContext): WorkflowSessionRunner[Future] =
+    import cps.monads.{FutureAsyncMonad, given}
+    new WorkflowSessionRunner[Future](EffectTag.futureTag)

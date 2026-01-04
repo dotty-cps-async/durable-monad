@@ -5,9 +5,10 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.{Try, Success, Failure}
 import java.time.Instant
 import cps.*
+import cps.monads.CpsIdentity
 import com.github.rssh.appcontext.*
 import durable.engine.{ConfigSource, WorkflowSessionRunner, WorkflowMetadata}
-import durable.runtime.SourcePos
+import durable.runtime.{SourcePos, EffectTag}
 
 /**
  * Durable[A] - A Monad describing a durable computation.
@@ -66,9 +67,11 @@ enum Durable[A]:
    *   - Retries on recoverable failures according to retryPolicy
    *
    * Storage and retryPolicy are captured at creation time via given resolution.
+   * EffectTag[F] indicates which effect the activity uses (Future, IO, etc.)
    */
-  case Activity[A, S <: DurableStorageBackend](
-    compute: () => Future[A],
+  case Activity[F[_], A, S <: DurableStorageBackend](
+    compute: () => F[A],
+    tag: EffectTag[F],
     storage: DurableStorage[A, S],
     retryPolicy: RetryPolicy,
     sourcePos: SourcePos = SourcePos.unknown
@@ -128,9 +131,11 @@ enum Durable[A]:
    *   - Returns F[T] immediately (parallel execution preserved)
    *
    * Storage, retryPolicy, and wrapper are captured at creation time via given resolution.
+   * EffectTag[F] indicates which effect the activity uses.
    */
   case AsyncActivity[F[_], T, S <: DurableStorageBackend](
     compute: () => F[T],
+    tag: EffectTag[F],
     storage: DurableStorage[T, S],
     retryPolicy: RetryPolicy,
     wrapper: DurableAsync[F]
@@ -148,9 +153,11 @@ enum Durable[A]:
    *   - Returns F[T] immediately
    *
    * Use cases: logging, metrics, IO[Unit], operations on ephemeral types
+   * EffectTag[F] indicates which effect the activity uses.
    */
   case LocalAsync[F[_], T](
     compute: () => F[T],
+    tag: EffectTag[F],
     wrapper: DurableAsync[F]
   ) extends Durable[F[T]]
 
@@ -388,30 +395,31 @@ object Durable:
    * Index is assigned at runtime by the interpreter.
    * Storage is captured via given resolution.
    * Policy defaults to RetryPolicy.default.
+   * Uses Future as the effect type.
    */
   def activity[A, S <: DurableStorageBackend](compute: => Future[A], policy: RetryPolicy = RetryPolicy.default)
                  (using storage: DurableStorage[A, S]): Durable[A] =
-    Activity(() => compute, storage, policy)
+    Activity[Future, A, S](() => compute, EffectTag.futureTag, storage, policy)
 
   /**
    * Create an activity from a synchronous computation.
-   * Convenience method that wraps the result in Future.successful.
+   * Uses CpsIdentity as the effect type - converted to target effect during interpretation.
    * Storage is captured via given resolution.
    * Policy defaults to RetryPolicy.default.
    */
   def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy = RetryPolicy.default)
                      (using storage: DurableStorage[A, S]): Durable[A] =
-    Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy)
+    Activity[CpsIdentity, A, S](() => compute, EffectTag.cpsIdentityTag, storage, policy)
 
   /**
    * Create an async activity - returns F[T] immediately, runs in parallel.
    * The result T is cached when F completes.
-   * Storage and wrapper are captured via given resolution.
+   * Storage, wrapper, and EffectTag are captured via given resolution.
    * Policy defaults to RetryPolicy.default.
    */
   def activityAsync[F[_], T, S <: DurableStorageBackend](compute: => F[T], policy: RetryPolicy = RetryPolicy.default)
-                      (using wrapper: DurableAsync[F], storage: DurableStorage[T, S]): Durable[F[T]] =
-    AsyncActivity(() => compute, storage, policy, wrapper)
+                      (using wrapper: DurableAsync[F], storage: DurableStorage[T, S], tag: EffectTag[F]): Durable[F[T]] =
+    AsyncActivity(() => compute, tag, storage, policy, wrapper)
 
   /** Suspend the workflow with a combined query (condition already contains storage) */
   def suspend[A, S <: DurableStorageBackend](condition: EventQuery.Combined[A, S]): Durable[A] =
@@ -485,17 +493,17 @@ object Durable:
      */
     def activity[A, S <: DurableStorageBackend](compute: => Future[A], policy: RetryPolicy)
                    (using storage: DurableStorage[A, S]): Durable[A] =
-      Durable.Activity(() => compute, storage, policy)
+      Durable.Activity[Future, A, S](() => compute, EffectTag.futureTag, storage, policy)
 
     /**
      * Create an activity from a synchronous computation.
-     * Wraps the result in Future.successful.
+     * Uses CpsIdentity as the effect type.
      * Used by preprocessor to wrap val definitions.
      * Takes explicit policy parameter - preprocessor passes RetryPolicy.default.
      */
     def activitySync[A, S <: DurableStorageBackend](compute: => A, policy: RetryPolicy, sourcePos: SourcePos = SourcePos.unknown)
                        (using storage: DurableStorage[A, S]): Durable[A] =
-      Durable.Activity(() => Future.fromTry(scala.util.Try(compute)), storage, policy, sourcePos)
+      Durable.Activity[CpsIdentity, A, S](() => compute, EffectTag.cpsIdentityTag, storage, policy, sourcePos)
 
     /**
      * Async variant of activitySync for dotty-cps-async.
@@ -519,7 +527,7 @@ object Durable:
      */
     def activity_async[A, S <: DurableStorageBackend](compute: () => Durable[Future[A]], policy: RetryPolicy)
                          (using storage: DurableStorage[A, S]): Durable[A] =
-      compute().flatMap(fut => Durable.Activity(() => fut, storage, policy))
+      compute().flatMap(fut => Durable.Activity[Future, A, S](() => fut, EffectTag.futureTag, storage, policy))
 
     /**
      * Create an async activity from an effect F[T].
@@ -528,8 +536,8 @@ object Durable:
      * Takes explicit policy parameter - preprocessor passes RetryPolicy.default.
      */
     def activityAsync[F[_], T, S <: DurableStorageBackend](compute: => F[T], policy: RetryPolicy)
-                        (using wrapper: DurableAsync[F], storage: DurableStorage[T, S]): Durable[F[T]] =
-      Durable.AsyncActivity(() => compute, storage, policy, wrapper)
+                        (using wrapper: DurableAsync[F], storage: DurableStorage[T, S], tag: EffectTag[F]): Durable[F[T]] =
+      Durable.AsyncActivity(() => compute, tag, storage, policy, wrapper)
 
     /**
      * Create a local async activity for ephemeral types - NOT cached.
@@ -537,8 +545,8 @@ object Durable:
      * Returns F[T] immediately, runs in parallel with subsequent code.
      */
     def localAsync[F[_], T](compute: => F[T])
-                           (using wrapper: DurableAsync[F]): Durable[F[T]] =
-      Durable.LocalAsync(() => compute, wrapper)
+                           (using wrapper: DurableAsync[F], tag: EffectTag[F]): Durable[F[T]] =
+      Durable.LocalAsync(() => compute, tag, wrapper)
 
     // === Context access methods (NOT cached - uses LocalComputation) ===
 

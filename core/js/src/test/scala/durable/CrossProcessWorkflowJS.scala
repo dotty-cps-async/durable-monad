@@ -79,8 +79,9 @@ def runProcessA(storageDir: String, workflowIdStr: String, input: String): js.Pr
   val workflowId = WorkflowId(workflowIdStr)
   val workflow = CrossProcessWorkflowJS.apply(input)
   val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+  val runner = WorkflowSessionRunner.forFuture
 
-  WorkflowSessionRunner.run(workflow, ctx).map { result =>
+  runner.run(workflow, ctx).map(_.toOption.get).map { result =>
     result match
       case WorkflowSessionResult.Suspended(snapshot, condition) =>
         println(s"[ProcessA] Workflow suspended at index ${snapshot.activityIndex}")
@@ -170,10 +171,11 @@ def runProcessB(storageDir: String, workflowIdStr: String, eventValue: String): 
           storeFuture.flatMap { _ =>
             // Resume from saved index + 1 (past the suspend point)
             val ctx = WorkflowSessionRunner.RunContext.resume(workflowId, metadata.activityIndex + 1, 0)
+            val runner = WorkflowSessionRunner.forFuture
 
             println(s"[ProcessB] Resuming workflow from index ${metadata.activityIndex + 1}")
 
-            WorkflowSessionRunner.run(workflow, ctx).map { result =>
+            runner.run(workflow, ctx).map(_.toOption.get).map { result =>
               result match
                 case WorkflowSessionResult.Completed(_, value) =>
                   println(s"[ProcessB] Workflow completed: $value")

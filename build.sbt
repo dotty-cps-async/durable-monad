@@ -52,8 +52,35 @@ lazy val coreJVM = core.jvm
 lazy val coreJS = core.js
 lazy val coreNative = core.native
 
+// Cats-effect integration module
+lazy val catsEffectVersion = "3.5.7"
+
+lazy val durableCe3 = crossProject(JVMPlatform, JSPlatform)
+  .crossType(CrossType.Full)
+  .in(file("durable-ce3"))
+  .dependsOn(core, core % "test->test")
+  .settings(
+    organization := "io.github.dotty-cps-async",
+    name := "durable-monad-ce3",
+    libraryDependencies ++= Seq(
+      "org.typelevel" %%% "cats-effect" % catsEffectVersion,
+      cpsAsyncOrg %%% "cps-async-connect-cats-effect" % "1.0.0",
+      "org.scalameta" %%% "munit" % "1.0.0" % Test,
+      "org.typelevel" %%% "munit-cats-effect" % "2.0.0" % Test
+    )
+  )
+  .jvmSettings(
+    Test / fork := true
+  )
+  .jsSettings(
+    scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.ESModule) }
+  )
+
+lazy val durableCe3JVM = durableCe3.jvm
+lazy val durableCe3JS = durableCe3.js
+
 lazy val root = project.in(file("."))
-  .aggregate(coreJVM, coreJS, coreNative)
+  .aggregate(coreJVM, coreJS, coreNative, durableCe3JVM, durableCe3JS)
   .settings(
     name := "durable-monad",
     publish / skip := true

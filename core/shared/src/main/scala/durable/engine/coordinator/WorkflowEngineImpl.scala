@@ -56,6 +56,9 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       _ <- runWorkflow(id, workflow, metadata.activityIndex, metadata.activityIndex, resultStorage)
     yield id
 
+  // Future-based runner (will be extended for dynamic runner switching later)
+  private val futureRunner = WorkflowSessionRunner.forFuture
+
   // Run workflow and handle result
   private def runWorkflow[A](
     workflowId: WorkflowId,
@@ -65,10 +68,21 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
     val ctx = WorkflowSessionRunner.RunContext(workflowId, storage, config.appContextCache, config.configSource, resumeFromIndex, activityOffset, config.runConfig)
-    val runnerFuture = WorkflowSessionRunner.run(workflow, ctx)
-    stateCoordinator.registerRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
+    val runnerFuture = futureRunner.run(workflow, ctx)
 
-    runnerFuture.flatMap {
+    // Wrap for coordinator registration (ignoring Left case for now)
+    val resultFuture = runnerFuture.flatMap {
+      case Right(result) => Future.successful(result)
+      case Left(needsBigger) =>
+        // TODO: Dynamic runner switching - switch to IORunner when available
+        Future.failed(new RuntimeException(
+          s"Workflow requires effect ${needsBigger.activityTag} which is not supported by FutureRunner. " +
+          "Add durable-ce3 dependency for IO support."
+        ))
+    }
+    stateCoordinator.registerRunner(workflowId, resultFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
+
+    resultFuture.flatMap {
       case WorkflowSessionResult.Completed(_, value) =>
         handleCompleted(workflowId, value, resultStorage)
 
@@ -171,10 +185,21 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     resultStorage: DurableStorage[A, S]
   ): Future[Unit] =
     val ctx = WorkflowSessionRunner.RunContext(workflowId, storage, config.appContextCache, config.configSource, resumeFromIndex, activityOffset, config.runConfig)
-    val runnerFuture = WorkflowSessionRunner.run(workflow, ctx)
-    stateCoordinator.registerRunner(workflowId, runnerFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
+    val runnerFuture = futureRunner.run(workflow, ctx)
 
-    runnerFuture.flatMap {
+    // Wrap for coordinator registration (ignoring Left case for now)
+    val resultFuture = runnerFuture.flatMap {
+      case Right(result) => Future.successful(result)
+      case Left(needsBigger) =>
+        // TODO: Dynamic runner switching - switch to IORunner when available
+        Future.failed(new RuntimeException(
+          s"Workflow requires effect ${needsBigger.activityTag} which is not supported by FutureRunner. " +
+          "Add durable-ce3 dependency for IO support."
+        ))
+    }
+    stateCoordinator.registerRunner(workflowId, resultFuture.asInstanceOf[Future[WorkflowSessionResult[?]]])
+
+    resultFuture.flatMap {
       case WorkflowSessionResult.Completed(_, value) =>
         handleCompletedInternal(workflowId, value, resultStorage)
 

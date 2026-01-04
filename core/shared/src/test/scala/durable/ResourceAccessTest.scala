@@ -11,6 +11,8 @@ import durable.engine.{WorkflowSessionRunner, WorkflowSessionResult}
 
 class ResourceAccessTest extends FunSuite:
 
+  private val runner = WorkflowSessionRunner.forFuture
+
   // Test resource that tracks creation count
   class TestResource:
     var accessCount = 0
@@ -39,7 +41,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -64,7 +66,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -99,7 +101,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -127,7 +129,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -165,7 +167,7 @@ class ResourceAccessTest extends FunSuite:
     // First run - creates resource and executes activity
     val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result1 = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx1))
+      await(runner.run(workflow, ctx1).map(_.toOption.get))
     }
 
     async[Future] {
@@ -180,7 +182,7 @@ class ResourceAccessTest extends FunSuite:
 
       // Replay - resource is created fresh but activity replays from cache
       val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, 1, 0) // Resume past the activity
-      val res2 = await(WorkflowSessionRunner.run(workflow, ctx2))
+      val res2 = await(runner.run(workflow, ctx2).map(_.toOption.get))
       res2 match
         case WorkflowSessionResult.Completed(_, value) =>
           // Activity result is cached, so we get the original value
@@ -212,7 +214,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -239,7 +241,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -289,7 +291,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -317,7 +319,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -389,7 +391,7 @@ class ResourceAccessTest extends FunSuite:
     async[Future] {
       // First iteration (count=3)
       val ctx1 = WorkflowSessionRunner.RunContext.fresh(workflowId)
-      val result1 = await(WorkflowSessionRunner.run(ResourceContinueWorkflow(3), ctx1))
+      val result1 = await(runner.run(ResourceContinueWorkflow(3), ctx1).map(_.toOption.get))
 
       result1 match
         case WorkflowSessionResult.ContinueAs(metadata, storeArgs, nextWorkflow) =>
@@ -401,7 +403,7 @@ class ResourceAccessTest extends FunSuite:
           await(storeArgs(backing, workflowId, scala.concurrent.ExecutionContext.global))
           // Use resume with activityOffset = argCount so activities start after stored args
           val ctx2 = WorkflowSessionRunner.RunContext.resume(workflowId, metadata.argCount, metadata.argCount)
-          val result2 = await(WorkflowSessionRunner.run(nextWorkflow(), ctx2))
+          val result2 = await(runner.run(nextWorkflow(), ctx2).map(_.toOption.get))
 
           result2 match
             case WorkflowSessionResult.ContinueAs(metadata2, storeArgs2, nextWorkflow2) =>
@@ -412,7 +414,7 @@ class ResourceAccessTest extends FunSuite:
               // Store args and run third iteration
               await(storeArgs2(backing, workflowId, scala.concurrent.ExecutionContext.global))
               val ctx3 = WorkflowSessionRunner.RunContext.resume(workflowId, metadata2.argCount, metadata2.argCount)
-              val result3 = await(WorkflowSessionRunner.run(nextWorkflow2(), ctx3))
+              val result3 = await(runner.run(nextWorkflow2(), ctx3).map(_.toOption.get))
 
               result3 match
                 case WorkflowSessionResult.Completed(_, value) =>
@@ -452,7 +454,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {
@@ -482,7 +484,7 @@ class ResourceAccessTest extends FunSuite:
 
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
     val result = async[Future] {
-      await(WorkflowSessionRunner.run(workflow, ctx))
+      await(runner.run(workflow, ctx).map(_.toOption.get))
     }
 
     async[Future] {

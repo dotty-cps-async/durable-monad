@@ -183,19 +183,24 @@ object DurablePreprocessor:
           List(fileName, lineNum)
         )
 
-        // Build: Durable.Activity[T, S](() => ..., storage, defaultPolicy, sourcePos)
+        // Build: Durable.Activity[Future, T, S](() => ..., tag, storage, defaultPolicy, sourcePos)
         val activityClass = Symbol.requiredClass("durable.Durable.Activity")
 
-        // Activity case class takes: compute: () => Future[A], storage: DurableStorage[A, S], retryPolicy: RetryPolicy, sourcePos: SourcePos
+        // Get the EffectTag.futureTag given instance (it's a singleton, no EC needed)
+        val effectTagModule = Symbol.requiredModule("durable.runtime.EffectTag")
+        val futureTagRef = Select(Ref(effectTagModule), effectTagModule.fieldMember("futureTag"))
+
+        // Activity case class takes: compute: () => Future[A], tag: EffectTag[Future], storage: DurableStorage[A, S], retryPolicy: RetryPolicy, sourcePos: SourcePos
         val activityCall = Apply(
           TypeApply(
             Ref(activityClass.companionModule).select(activityClass.companionModule.methodMember("apply").head),
             List(
+              TypeTree.of[scala.concurrent.Future],
               TypeTree.of(using innerType.asType),
               TypeTree.of(using backendType.asType)
             )
           ),
-          List(lambda, storage, defaultPolicy, sourcePos)
+          List(lambda, futureTagRef, storage, defaultPolicy, sourcePos)
         )
 
         // Wrap with await[Durable, T, Durable](activityCall)(using ctx, identityConversion)

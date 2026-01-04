@@ -122,6 +122,8 @@ Key differences from sync activities:
 
 See [Async Activities](async-activities.md) for full details.
 
+**Cats-Effect Integration:** For workflows using cats-effect `IO`, the `durable-ce3` module provides `WorkflowSessionRunner[IO]` and `DurableAsync[IO]`. See [Cats-Effect Integration](cats-effect-integration.md) for the design.
+
 ### 2. External Calls (inbound)
 
 Operations where the workflow waits for something external to happen. Require `await` - we're waiting for input from outside.
@@ -556,48 +558,50 @@ This ensures:
 
 ### Runtime Interpreter (WorkflowSessionRunner)
 
-The interpreter tracks activity index and handles replay.
-Each Activity carries its own `DurableStorage[A, S]`:
+The interpreter is generic over effect type `G[_]` with `CpsAsyncMonad[G]`, tracks activity index, and handles replay. Each Activity carries its own `DurableStorage[A, S]` and `EffectTag[F]`.
 
 ```scala
+class WorkflowSessionRunner[G[_]](
+  val targetTag: EffectTag[G]
+)(using val monad: CpsAsyncMonad[G]) {
+
+  def run[A](workflow: Durable[A], ctx: RunContext)
+            (using S <: DurableStorageBackend, backend: S): G[Either[NeedsBiggerRunner, WorkflowSessionResult[A]]]
+
+  // Lift Future storage operations into G
+  def liftFuture[A](fa: Future[A]): G[A] =
+    monad.adoptCallbackStyle[A](callback =>
+      fa.onComplete(callback)(ExecutionContext.parasitic)
+    )
+}
+
 object WorkflowSessionRunner {
   case class RunContext(
     workflowId: WorkflowId,
-    resumeFromIndex: Int
+    resumeFromIndex: Int,
+    ...
   )
-  private class InterpreterState(val resumeFromIndex: Int) {
-    private var _currentIndex: Int = 0
 
-    def nextIndex(): Int = {
-      val idx = _currentIndex
-      _currentIndex += 1
-      idx
-    }
+  // Create a Future-based runner
+  def forFuture(using ExecutionContext): WorkflowSessionRunner[Future] =
+    import cps.monads.FutureAsyncMonad
+    new WorkflowSessionRunner[Future](EffectTag.futureTag)
+}
 
-    def isReplayingAt(index: Int): Boolean = index < resumeFromIndex
-  }
+// Usage:
+val runner = WorkflowSessionRunner.forFuture
+runner.run(workflow, ctx).map(_.toOption.get).map { result => ... }
 
-  def run[A](workflow: Durable[A], ctx: RunContext)
-            (using ec: ExecutionContext): Future[WorkflowResult[A]] = {
-    val state = new InterpreterState(ctx.resumeFromIndex)
-    step(workflow, ctx, state, Nil)
-  }
-
-  // When handling Activity - storage from the Activity node:
-  case Durable.Activity(compute, storage, retryPolicy) =>
-    val index = state.nextIndex()
-    if (state.isReplayingAt(index))
-      storage.retrieve(ctx.workflowId, index).flatMap {
-        case Some(Right(value)) => // cached success
-        case Some(Left(failure)) => // cached failure - rethrow as ReplayedException
-        case None => // cache miss - shouldn't happen during replay
-      }
-    else
-      compute().flatMap { result =>
-        storage.store(ctx.workflowId, index, result)  // cache success & continue
-      }.recoverWith { case ex =>
-        storage.storeFailure(ctx.workflowId, index, StoredFailure.from(ex)) // cache failure
-      }
+// When handling Activity - checks effect compatibility:
+case Durable.Activity(compute, tag, storage, retryPolicy) =>
+  targetTag.conversionFrom(tag) match
+    case Some(conversion) =>
+      // Can handle - convert and execute
+      val computeG: G[A] = conversion(compute())
+      ...
+    case None =>
+      // Need bigger runner - return Left(NeedsBiggerRunner)
+      ...
 }
 ```
 

@@ -12,6 +12,7 @@ import durable.runtime.DurableFunctionRegistry
 class DurableFunctionTest extends FunSuite:
 
   given ExecutionContext = ExecutionContext.global
+  private val runner = WorkflowSessionRunner.forFuture
 
   // Provide storage via given (MemoryBackingStore pattern)
   import MemoryBackingStore.given
@@ -120,7 +121,7 @@ class DurableFunctionTest extends FunSuite:
     val workflowId = WorkflowId("test-fn-1")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(workflowId, "Hello, Claude!"))
     }
   }
@@ -141,7 +142,7 @@ class DurableFunctionTest extends FunSuite:
     val workflowId = WorkflowId("test-fn-2")
     val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
 
-    WorkflowSessionRunner.run(workflow, ctx).map { result =>
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
       assertEquals(result, WorkflowSessionResult.Completed(ctx.workflowId, "Processed: test"))
       assertEquals(executeCount, 1)
     }
