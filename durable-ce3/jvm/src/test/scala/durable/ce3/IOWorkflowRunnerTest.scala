@@ -170,3 +170,121 @@ class IOWorkflowRunnerTest extends CatsEffectSuite:
     }
   }
 
+  test("FutureRunner returns NeedsBiggerRunner for IO activity, IORunner completes") {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    import durable.engine.NeedsBiggerRunner
+
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("io-switch-test-1")
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+
+    // Create a workflow with an IO activity (requires IORunner)
+    var ioExecuted = false
+    val ioActivity = Durable.Activity[IO, Int, MemoryBackingStore](
+      compute = () => IO { ioExecuted = true; 42 },
+      tag = IOEffectTag.ioTag,
+      storage = summon[DurableStorage[Int, MemoryBackingStore]],
+      retryPolicy = RetryPolicy.default
+    )
+
+    val workflow = for
+      a <- Durable.pure[Int](10)
+      b <- ioActivity
+    yield a + b
+
+    // Run with FutureRunner - should return Left(NeedsBiggerRunner)
+    val futureRunner = WorkflowSessionRunner.forFuture
+
+    IO.fromFuture(IO(futureRunner.run(workflow, ctx))).flatMap { result =>
+      assert(result.isLeft, s"Expected Left(NeedsBiggerRunner), got $result")
+      val needsBigger = result.swap.toOption.get
+      assertEquals(needsBigger.activityTag, IOEffectTag.ioTag)
+      assert(!ioExecuted, "IO activity should not have executed yet")
+
+      // Resume with IORunner from the saved state
+      val ioRunner = WorkflowRunnerIO.apply
+      ioRunner.resumeFrom(needsBigger.state).map { resumeResult =>
+        assert(resumeResult.isRight, s"Expected Right(result), got $resumeResult")
+        val sessionResult = resumeResult.toOption.get
+        assert(sessionResult.isInstanceOf[WorkflowSessionResult.Completed[?]])
+        val completed = sessionResult.asInstanceOf[WorkflowSessionResult.Completed[Int]]
+        assertEquals(completed.value, 52)
+        assert(ioExecuted, "IO activity should have executed")
+      }
+    }
+  }
+
+  test("FutureRunner handles Future activities, switches to IO only when needed") {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    import durable.engine.NeedsBiggerRunner
+
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("io-switch-test-2")
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+
+    var futureExecuted = false
+    var ioExecuted = false
+
+    // Workflow: Future activity -> IO activity -> Future activity
+    val workflow = for
+      a <- Durable.activity { futureExecuted = true; Future.successful(10) }
+      b <- Durable.Activity[IO, Int, MemoryBackingStore](
+        compute = () => IO { ioExecuted = true; 20 },
+        tag = IOEffectTag.ioTag,
+        storage = summon[DurableStorage[Int, MemoryBackingStore]],
+        retryPolicy = RetryPolicy.default
+      )
+      c <- Durable.activity { Future.successful(12) }
+    yield a + b + c
+
+    val futureRunner = WorkflowSessionRunner.forFuture
+
+    IO.fromFuture(IO(futureRunner.run(workflow, ctx))).flatMap { result =>
+      // Future activity should have executed, then hit IO activity
+      assert(futureExecuted, "Future activity should have executed before hitting IO")
+      assert(!ioExecuted, "IO activity should not have executed by FutureRunner")
+      assert(result.isLeft, s"Expected Left(NeedsBiggerRunner), got $result")
+
+      val needsBigger = result.swap.toOption.get
+      assertEquals(needsBigger.activityTag, IOEffectTag.ioTag)
+      // Activity index should be 1 (after Future activity at index 0)
+      assertEquals(needsBigger.state.activityIndex, 1)
+
+      // Resume with IORunner
+      val ioRunner = WorkflowRunnerIO.apply
+      ioRunner.resumeFrom(needsBigger.state).map { resumeResult =>
+        assert(resumeResult.isRight)
+        val completed = resumeResult.toOption.get.asInstanceOf[WorkflowSessionResult.Completed[Int]]
+        assertEquals(completed.value, 42)
+        assert(ioExecuted, "IO activity should have executed")
+      }
+    }
+  }
+
+  test("IORunner handles mixed Future and IO activities without switching") {
+    given backing: MemoryBackingStore = MemoryBackingStore()
+    val workflowId = WorkflowId("io-mixed-test")
+    val ctx = WorkflowSessionRunner.RunContext.fresh(workflowId)
+
+    var futureCount = 0
+    var ioCount = 0
+
+    val workflow = for
+      a <- Durable.activity { futureCount += 1; Future.successful(10) }
+      b <- Durable.Activity[IO, Int, MemoryBackingStore](
+        compute = () => IO { ioCount += 1; 20 },
+        tag = IOEffectTag.ioTag,
+        storage = summon[DurableStorage[Int, MemoryBackingStore]],
+        retryPolicy = RetryPolicy.default
+      )
+      c <- Durable.activity { futureCount += 1; Future.successful(12) }
+    yield a + b + c
+
+    // IORunner can handle everything - no switching needed
+    runner.run(workflow, ctx).map(_.toOption.get).map { result =>
+      assertEquals(result, WorkflowSessionResult.Completed(workflowId, 42))
+      assertEquals(futureCount, 2)
+      assertEquals(ioCount, 1)
+    }
+  }
+
