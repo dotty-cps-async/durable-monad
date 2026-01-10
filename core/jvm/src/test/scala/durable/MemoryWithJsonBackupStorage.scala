@@ -84,6 +84,11 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
       case None =>
         Future.successful(None)
 
+  def loadWorkflowRecord(workflowId: WorkflowId): Future[Option[WorkflowRecord]] =
+    workflows.get(workflowId.value) match
+      case Some(r) => Future.successful(Some(storedRecordToWorkflowRecord(r)))
+      case None => Future.successful(None)
+
   def updateWorkflowStatus(workflowId: WorkflowId, status: WorkflowStatus): Future[Unit] =
     workflows.get(workflowId.value).foreach { record =>
       workflows.put(workflowId.value, record.copy(status = status.toString, updatedAt = Instant.now().toString))
@@ -120,31 +125,58 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
   def listActiveWorkflows(): Future[Seq[WorkflowRecord]] =
     val active = workflows.values.filter { r =>
       r.status == "Running" || r.status == "Suspended"
-    }.map { r =>
-      // Parse simple wait fields directly
-      val (waitingForEvents, waitingForTimer, waitingForWorkflows) =
-        (r.waitConditionType, r.waitConditionData) match
-          case (Some("Timer"), Some(timerStr)) =>
-            (Set.empty[String], Some(Instant.parse(timerStr)), Set.empty[WorkflowId])
-          case (Some("Event"), Some(eventNames)) =>
-            (eventNames.split(",").toSet, None, Set.empty[WorkflowId])
-          case (Some("Workflow"), Some(workflowIds)) =>
-            (Set.empty[String], None, workflowIds.split(",").map(WorkflowId(_)).toSet)
-          case _ =>
-            (Set.empty[String], None, Set.empty[WorkflowId])
-      WorkflowRecord(
-        id = WorkflowId(r.id),
-        metadata = WorkflowMetadata(r.functionName, r.argCount, r.activityIndex),
-        status = WorkflowStatus.valueOf(r.status),
-        waitingForEvents = waitingForEvents,
-        waitingForTimer = waitingForTimer,
-        waitingForWorkflows = waitingForWorkflows,
-        parentId = r.parentId.map(WorkflowId(_)),
-        createdAt = Instant.parse(r.createdAt),
-        updatedAt = Instant.parse(r.updatedAt)
-      )
-    }.toSeq
+    }.map(storedRecordToWorkflowRecord).toSeq
     Future.successful(active)
+
+  def listWorkflowsByStatus(status: WorkflowStatus): Future[Seq[WorkflowRecord]] =
+    val filtered = workflows.values.filter(_.status == status.toString)
+      .map(storedRecordToWorkflowRecord).toSeq
+    Future.successful(filtered)
+
+  def listWorkflowsWithTimerBefore(deadline: Instant): Future[Seq[WorkflowRecord]] =
+    val filtered = workflows.values.filter { r =>
+      r.status == "Suspended" &&
+      r.waitConditionType.contains("Timer") &&
+      r.waitConditionData.exists(d => Instant.parse(d).isBefore(deadline))
+    }.map(storedRecordToWorkflowRecord).toSeq
+    Future.successful(filtered)
+
+  def listWorkflowsWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]] =
+    val filtered = workflows.values.filter { r =>
+      r.status == "Suspended" &&
+      r.waitConditionType.contains("Event") &&
+      r.waitConditionData.exists(_.split(",").contains(eventName))
+    }.map(storedRecordToWorkflowRecord).toSeq
+    Future.successful(filtered)
+
+  def listAllPendingBroadcastEvents(): Future[Seq[(String, PendingEvent[?])]] =
+    val all = pendingEvents.flatMap { case (eventName, events) =>
+      events.map(e => (eventName, PendingEvent[String](EventId(e.eventId), e.eventName, e.value, Instant.parse(e.timestamp)): PendingEvent[?]))
+    }.toSeq
+    Future.successful(all)
+
+  private def storedRecordToWorkflowRecord(r: StoredWorkflowRecord): WorkflowRecord =
+    val (waitingForEvents, waitingForTimer, waitingForWorkflows) =
+      (r.waitConditionType, r.waitConditionData) match
+        case (Some("Timer"), Some(timerStr)) =>
+          (Set.empty[String], Some(Instant.parse(timerStr)), Set.empty[WorkflowId])
+        case (Some("Event"), Some(eventNames)) =>
+          (eventNames.split(",").toSet, None, Set.empty[WorkflowId])
+        case (Some("Workflow"), Some(workflowIds)) =>
+          (Set.empty[String], None, workflowIds.split(",").map(WorkflowId(_)).toSet)
+        case _ =>
+          (Set.empty[String], None, Set.empty[WorkflowId])
+    WorkflowRecord(
+      id = WorkflowId(r.id),
+      metadata = WorkflowMetadata(r.functionName, r.argCount, r.activityIndex),
+      status = WorkflowStatus.valueOf(r.status),
+      waitingForEvents = waitingForEvents,
+      waitingForTimer = waitingForTimer,
+      waitingForWorkflows = waitingForWorkflows,
+      parentId = r.parentId.map(WorkflowId(_)),
+      createdAt = Instant.parse(r.createdAt),
+      updatedAt = Instant.parse(r.updatedAt)
+    )
 
   // DurableStorageBackend: winning condition tracking for replay
   // For this simple test storage, we store winning conditions in the activities map with a special key prefix

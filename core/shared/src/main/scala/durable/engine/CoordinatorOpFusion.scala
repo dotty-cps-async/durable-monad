@@ -47,6 +47,11 @@ object CoordinatorOpFusion:
       case CoordinatorOp.RecoverWorkflows(_) => None
       case CoordinatorOp.CancelAllTimers() => None
       case CoordinatorOp.Shutdown() => None
+      // Lazy loading operations
+      case CoordinatorOp.EnsureLoaded(id) => Some(id)
+      case CoordinatorOp.EvictFromCache(_) => None
+      case CoordinatorOp.EvictByTtl(_) => None
+      case CoordinatorOp.TouchWorkflow(id) => Some(id)
 
   private def fuseForWorkflow(workflowIdOpt: Option[WorkflowId], ops: Seq[CoordinatorOp[?]]): Seq[FusedOp] =
     workflowIdOpt match

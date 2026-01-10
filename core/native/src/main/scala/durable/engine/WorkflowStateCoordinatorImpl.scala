@@ -147,6 +147,18 @@ class WorkflowStateCoordinatorImpl(
         coordinatorThread.interrupt()
         ()
 
+      case CoordinatorOp.EnsureLoaded(workflowId) =>
+        executeEnsureLoaded(workflowId)
+
+      case CoordinatorOp.EvictFromCache(workflowIds) =>
+        executeEvictFromCache(workflowIds)
+
+      case CoordinatorOp.EvictByTtl(notAccessedSince) =>
+        executeEvictByTtl(notAccessedSince)
+
+      case CoordinatorOp.TouchWorkflow(workflowId) =>
+        executeTouchWorkflow(workflowId)
+
   /**
    * Execute fused operation.
    */
@@ -342,3 +354,47 @@ class WorkflowStateCoordinatorImpl(
       runnersMap.remove(id)
       record
     }
+
+  // === Lazy Loading Operations ===
+
+  private def executeEnsureLoaded(workflowId: WorkflowId): Option[WorkflowRecord] =
+    activeMap.get(workflowId) match
+      case Some(record) =>
+        val updated = record.copy(lastAccessedAt = Instant.now())
+        activeMap.put(workflowId, updated)
+        Some(updated)
+      case None =>
+        // Load full record from storage (includes wait conditions)
+        awaitStorage(storage.loadWorkflowRecord(workflowId)) match
+          case Some(record) if !record.status.isTerminal =>
+            val updated = record.copy(lastAccessedAt = Instant.now())
+            activeMap.put(workflowId, updated)
+            Some(updated)
+          case _ =>
+            None
+
+  private def executeEvictFromCache(workflowIds: Seq[WorkflowId]): Int =
+    var evicted = 0
+    workflowIds.foreach { id =>
+      activeMap.get(id) match
+        case Some(record) if record.status == WorkflowStatus.Suspended =>
+          if !runnersMap.contains(id) && !timersMap.contains(id) then
+            activeMap.remove(id)
+            evicted += 1
+        case _ => ()
+    }
+    evicted
+
+  private def executeEvictByTtl(notAccessedSince: Instant): Int =
+    val toEvict = activeMap.values.filter { r =>
+      r.status == WorkflowStatus.Suspended &&
+      r.lastAccessedAt.isBefore(notAccessedSince) &&
+      !runnersMap.contains(r.id) &&
+      !timersMap.contains(r.id)
+    }.map(_.id).toSeq
+
+    toEvict.foreach(activeMap.remove)
+    toEvict.size
+
+  private def executeTouchWorkflow(workflowId: WorkflowId): Unit =
+    activeMap.updateWith(workflowId)(_.map(_.copy(lastAccessedAt = Instant.now())))

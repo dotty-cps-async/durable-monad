@@ -88,6 +88,43 @@ enum CoordinatorOp[+R]:
 
   case Shutdown() extends CoordinatorOp[Unit]
 
+  // === Lazy Loading Operations ===
+
+  /**
+   * Ensure workflow is loaded into memory.
+   * If already in memory, returns immediately.
+   * If not, loads from storage and adds to activeMap.
+   */
+  case EnsureLoaded(
+    workflowId: WorkflowId
+  ) extends CoordinatorOp[Option[WorkflowRecord]]
+
+  /**
+   * Evict workflows from in-memory cache.
+   * State remains in storage - only removes from activeMap.
+   * Returns count of workflows evicted.
+   */
+  case EvictFromCache(
+    workflowIds: Seq[WorkflowId]
+  ) extends CoordinatorOp[Int]
+
+  /**
+   * Evict suspended workflows not accessed since the threshold time.
+   * Performs filtering internally since coordinator has access to activeMap.
+   * Returns count of workflows evicted.
+   */
+  case EvictByTtl(
+    notAccessedSince: Instant
+  ) extends CoordinatorOp[Int]
+
+  /**
+   * Update lastAccessedAt timestamp for a workflow.
+   * Used to track activity for TTL-based eviction.
+   */
+  case TouchWorkflow(
+    workflowId: WorkflowId
+  ) extends CoordinatorOp[Unit]
+
 /**
  * Result of SuspendAndCheckPending operation.
  */

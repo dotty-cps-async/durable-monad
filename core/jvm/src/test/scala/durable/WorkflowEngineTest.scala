@@ -248,12 +248,25 @@ class WorkflowEngineTest extends FunSuite:
     val engine2 = WorkflowEngine(storage)
     val report = Await.result(engine2.recover(), 5.seconds)
 
-    assertEquals(report.activeWorkflows, 1)
-    assertEquals(report.resumedSuspended, 1)
+    // With lazy loading, workflows waiting for events (not timers) are not loaded on recovery
+    // They will be loaded on-demand when an event arrives
+    // The report shows 0 loaded because there are no running workflows, timers, or pending events
+    assertEquals(report.totalLoaded, 0)
 
-    // Verify workflow status is restored
+    // Verify workflow status can still be queried (from storage)
     val status = Await.result(engine2.queryStatus(workflowId), 5.seconds)
     assertEquals(status, Some(WorkflowStatus.Suspended))
+
+    // EventWorkflow awaits String events with name "test-signal"
+    given DurableEventName[String] = DurableEventName("test-signal")
+
+    // Send event - this will load the workflow and wake it
+    Await.result(engine2.sendEventTo(workflowId, "signal-value"), 5.seconds)
+    Thread.sleep(100)
+
+    // Workflow should now be completed
+    val finalStatus = Await.result(engine2.queryStatus(workflowId), 5.seconds)
+    assertEquals(finalStatus, Some(WorkflowStatus.Succeeded))
   }
 
   // ===== sendEventTo tests =====

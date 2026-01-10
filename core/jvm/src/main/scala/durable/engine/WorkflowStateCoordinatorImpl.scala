@@ -137,6 +137,18 @@ class WorkflowStateCoordinatorImpl(
         executor.shutdown()
         ()
 
+      case CoordinatorOp.EnsureLoaded(workflowId) =>
+        executeEnsureLoaded(workflowId)
+
+      case CoordinatorOp.EvictFromCache(workflowIds) =>
+        executeEvictFromCache(workflowIds)
+
+      case CoordinatorOp.EvictByTtl(notAccessedSince) =>
+        executeEvictByTtl(notAccessedSince)
+
+      case CoordinatorOp.TouchWorkflow(workflowId) =>
+        executeTouchWorkflow(workflowId)
+
   /**
    * Execute fused operation.
    */
@@ -342,3 +354,55 @@ class WorkflowStateCoordinatorImpl(
       runnersMap.remove(id)
       record
     }
+
+  // === Lazy Loading Operations ===
+
+  private def executeEnsureLoaded(workflowId: WorkflowId): Option[WorkflowRecord] =
+    // Check if already in memory
+    activeMap.get(workflowId) match
+      case Some(record) =>
+        // Already loaded - just update lastAccessedAt
+        val updated = record.copy(lastAccessedAt = Instant.now())
+        activeMap.put(workflowId, updated)
+        Some(updated)
+      case None =>
+        // Load full record from storage (includes wait conditions)
+        awaitStorage(storage.loadWorkflowRecord(workflowId)) match
+          case Some(record) if !record.status.isTerminal =>
+            val updated = record.copy(lastAccessedAt = Instant.now())
+            activeMap.put(workflowId, updated)
+            Some(updated)
+          case _ =>
+            // Not found or terminal - don't load
+            None
+
+  private def executeEvictFromCache(workflowIds: Seq[WorkflowId]): Int =
+    var evicted = 0
+    workflowIds.foreach { id =>
+      activeMap.get(id) match
+        case Some(record) if record.status == WorkflowStatus.Suspended =>
+          // Only evict suspended workflows
+          // Don't evict if there's an active runner or scheduled timer
+          if !runnersMap.contains(id) && !timersMap.contains(id) then
+            activeMap.remove(id)
+            evicted += 1
+        case _ =>
+          // Running/terminal or not in memory - skip
+          ()
+    }
+    evicted
+
+  private def executeEvictByTtl(notAccessedSince: Instant): Int =
+    // Find suspended workflows not accessed since threshold
+    val toEvict = activeMap.values.filter { r =>
+      r.status == WorkflowStatus.Suspended &&
+      r.lastAccessedAt.isBefore(notAccessedSince) &&
+      !runnersMap.contains(r.id) &&
+      !timersMap.contains(r.id)  // Don't evict if timer is scheduled
+    }.map(_.id).toSeq
+
+    toEvict.foreach(activeMap.remove)
+    toEvict.size
+
+  private def executeTouchWorkflow(workflowId: WorkflowId): Unit =
+    activeMap.updateWith(workflowId)(_.map(_.copy(lastAccessedAt = Instant.now())))

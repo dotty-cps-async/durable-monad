@@ -38,7 +38,9 @@ case class WorkflowRecord(
   waitingForWorkflows: Set[WorkflowId],
   parentId: Option[WorkflowId],
   createdAt: Instant,
-  updatedAt: Instant
+  updatedAt: Instant,
+  // For TTL-based cache eviction (lazy loading)
+  lastAccessedAt: Instant = Instant.now()
 ):
   /** Check if waiting for a specific event */
   def isWaitingForEvent(name: String): Boolean = waitingForEvents.contains(name)

@@ -70,6 +70,9 @@ class MemoryBackingStore(
     val result = workflowRecords.get(workflowId).map(r => (r.metadata, r.status))
     Future.successful(result)
 
+  def loadWorkflowRecord(workflowId: WorkflowId): Future[Option[WorkflowRecord]] =
+    Future.successful(workflowRecords.get(workflowId))
+
   def updateWorkflowStatus(workflowId: WorkflowId, status: WorkflowStatus): Future[Unit] =
     workflowRecords.get(workflowId).foreach { record =>
       workflowRecords.put(workflowId, record.copy(status = status, updatedAt = Instant.now()))
@@ -99,6 +102,30 @@ class MemoryBackingStore(
       r.status == WorkflowStatus.Running || r.status == WorkflowStatus.Suspended
     }.toSeq
     Future.successful(active)
+
+  def listWorkflowsByStatus(status: WorkflowStatus): Future[Seq[WorkflowRecord]] =
+    val filtered = workflowRecords.values.filter(_.status == status).toSeq
+    Future.successful(filtered)
+
+  def listWorkflowsWithTimerBefore(deadline: Instant): Future[Seq[WorkflowRecord]] =
+    val filtered = workflowRecords.values.filter { r =>
+      r.status == WorkflowStatus.Suspended &&
+      r.waitingForTimer.exists(_.isBefore(deadline))
+    }.toSeq
+    Future.successful(filtered)
+
+  def listWorkflowsWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]] =
+    val filtered = workflowRecords.values.filter { r =>
+      r.status == WorkflowStatus.Suspended &&
+      r.waitingForEvents.contains(eventName)
+    }.toSeq
+    Future.successful(filtered)
+
+  def listAllPendingBroadcastEvents(): Future[Seq[(String, PendingEvent[?])]] =
+    val all = pendingEvents.flatMap { case (eventName, events) =>
+      events.map(e => (eventName, e: PendingEvent[?]))
+    }.toSeq
+    Future.successful(all)
 
   // DurableStorageBackend: winning condition tracking for replay
 

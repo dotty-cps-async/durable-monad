@@ -43,13 +43,6 @@ WorkflowEngine is the orchestration layer that manages multiple concurrent workf
 - Coordinates parent-child relationships
 - Persists and recovers workflow state
 
-### Why Not Merge?
-
-1. **Single Responsibility**: Runner interprets; Engine orchestrates
-2. **Testability**: Runner can be unit-tested with single workflows
-3. **Flexibility**: Different engine implementations (in-memory, distributed) with same runner
-4. **Simplicity**: Runner stays simple; complexity lives in Engine
-
 ## WorkflowEngine Trait (Public API)
 
 The `WorkflowEngine` trait defines the public interface. Implementation details are platform-specific.
@@ -870,6 +863,159 @@ core/native/src/main/scala/durable/
 ```
 
 Note: Persistence uses `DurableStorageBackend` - no separate persistence layer needed.
+
+## Lazy Loading
+
+For systems with many dormant workflows (thousands waiting for events that may not arrive for days/weeks), the engine uses lazy loading to reduce memory usage and startup time.
+
+### Configuration
+
+```scala
+case class WorkflowEngineConfig(
+  // ... existing fields ...
+
+  // Periodic wakeup settings (lazy loading always enabled)
+  timerHorizon: FiniteDuration = 10.minutes,       // How far ahead to schedule timers
+  timerSweepInterval: FiniteDuration = 5.minutes,  // How often to check for new timers
+  cacheTtl: FiniteDuration = 30.minutes,           // Evict workflows not accessed within this period
+  cacheEvictionInterval: FiniteDuration = 5.minutes // How often to run cache eviction
+)
+```
+
+### Recovery Behavior
+
+On startup, `recover()` only loads what's immediately needed:
+
+1. **Running workflows** (eagerly) - were interrupted by crash, need immediate resumption
+2. **Suspended workflows with near-term timers** - timers within `timerHorizon` window
+3. **Workflows waiting for pending broadcast events** - loaded so they can receive queued events
+
+Other suspended workflows remain in storage until accessed.
+
+```scala
+def recover(): Future[RecoveryReport] =
+  for
+    // 1. Load RUNNING workflows eagerly
+    running <- storage.listWorkflowsByStatus(WorkflowStatus.Running)
+    _ <- resumeRunningWorkflows(running)
+
+    // 2. Load workflows with timers within horizon
+    timerDeadline = Instant.now().plus(config.timerHorizon)
+    nearTimers <- storage.listWorkflowsWithTimerBefore(timerDeadline)
+    _ <- scheduleTimers(nearTimers)
+
+    // 3. Load workflows waiting for pending events
+    pendingEvents <- storage.listAllPendingBroadcastEvents()
+    waitingWorkflows <- loadWorkflowsWaitingForEvents(pendingEvents)
+
+    // 4. Start periodic sweeps
+    _ = startTimerSweep()
+    _ = startCacheEviction()
+  yield RecoveryReport(...)
+```
+
+### On-Demand Loading
+
+When an event is sent to a workflow not in memory, it's loaded automatically:
+
+```scala
+def sendEventTo[E](targetWorkflowId: WorkflowId, event: E)(...): Future[Unit] =
+  // Load workflow from storage if not in memory
+  val ensureLoaded: Future[Unit] =
+    if stateCoordinator.getActive(targetWorkflowId).isEmpty then
+      stateCoordinator.submit(CoordinatorOp.EnsureLoaded(targetWorkflowId)).map(_ => ())
+    else
+      Future.successful(())
+
+  for
+    _ <- ensureLoaded
+    result <- stateCoordinator.submit(CoordinatorOp.SendTargetedEvent(...))
+    // ... deliver and resume
+  yield ()
+```
+
+For broadcast events, storage is queried for ALL waiting workflows:
+
+```scala
+def sendEventBroadcast[E](event: E)(...): Future[Unit] =
+  for
+    // Query storage for workflows waiting for this event type
+    storageWaiting <- storage.listWorkflowsWaitingForEvent(eventName)
+    // Load any not already in memory
+    notInMemory = storageWaiting.filter(w => stateCoordinator.getActive(w.id).isEmpty)
+    _ <- stateCoordinator.recoverWorkflows(notInMemory)
+    // Deliver event
+    result <- stateCoordinator.submit(CoordinatorOp.SendBroadcastEvent(...))
+  yield ()
+```
+
+### Periodic Sweeps
+
+Two background tasks keep the system responsive:
+
+**Timer Sweep** (runs every `timerSweepInterval`):
+```scala
+private def runTimerSweep(): Future[Unit] =
+  val deadline = Instant.now().plus(config.timerHorizon)
+  for
+    workflows <- storage.listWorkflowsWithTimerBefore(deadline)
+    unscheduled = workflows.filter(w => stateCoordinator.getActive(w.id).isEmpty)
+    _ <- stateCoordinator.recoverWorkflows(unscheduled)
+    _ <- scheduleTimers(unscheduled)
+  yield ()
+```
+
+**Cache Eviction** (runs every `cacheEvictionInterval`):
+```scala
+private def runCacheEviction(): Future[Unit] =
+  val threshold = Instant.now().minus(config.cacheTtl)
+  // Evict suspended workflows not accessed since threshold
+  stateCoordinator.submit(CoordinatorOp.EvictByTtl(threshold)).map(_ => ())
+```
+
+### Storage Interface Extensions
+
+```scala
+trait DurableStorageBackend:
+  // ... existing methods ...
+
+  // Status-based queries
+  def listWorkflowsByStatus(status: WorkflowStatus): Future[Seq[WorkflowRecord]]
+
+  // Timer-based queries (for periodic sweep)
+  def listWorkflowsWithTimerBefore(deadline: Instant): Future[Seq[WorkflowRecord]]
+
+  // Event-based queries (for broadcast delivery)
+  def listWorkflowsWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]]
+
+  // Pending events (for recovery)
+  def listAllPendingBroadcastEvents(): Future[Seq[(String, PendingEvent[?])]]
+
+  // Full record loading (for lazy loading with wait conditions)
+  def loadWorkflowRecord(workflowId: WorkflowId): Future[Option[WorkflowRecord]]
+```
+
+### Coordinator Operations
+
+```scala
+enum CoordinatorOp[+R]:
+  // ... existing operations ...
+
+  // Lazy loading operations
+  case EnsureLoaded(workflowId: WorkflowId) extends CoordinatorOp[Option[WorkflowRecord]]
+  case EvictFromCache(workflowIds: Seq[WorkflowId]) extends CoordinatorOp[Int]
+  case EvictByTtl(notAccessedSince: Instant) extends CoordinatorOp[Int]
+  case TouchWorkflow(workflowId: WorkflowId) extends CoordinatorOp[Unit]
+```
+
+### WorkflowRecord Extension
+
+```scala
+case class WorkflowRecord(
+  // ... existing fields ...
+  lastAccessedAt: Instant = Instant.now()  // For TTL-based cache eviction
+)
+```
 
 ## Next Steps
 

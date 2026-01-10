@@ -337,7 +337,15 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     val timestamp = Instant.now()
     val policy = eventConfig.onTargetTerminated
 
+    // Ensure workflow is loaded before sending event (lazy loading)
+    val ensureLoaded: Future[Unit] =
+      if stateCoordinator.getActive(targetWorkflowId).isEmpty then
+        stateCoordinator.submit(CoordinatorOp.EnsureLoaded(targetWorkflowId)).map(_ => ())
+      else
+        Future.successful(())
+
     for
+      _ <- ensureLoaded
       result <- stateCoordinator.submit(CoordinatorOp.SendTargetedEvent(
         targetWorkflowId, name, event, eventId, timestamp, policy,
         eventStorage.asInstanceOf[DurableStorage[?, ?]]
@@ -366,8 +374,19 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
     val eventId = EventId.generate()
     val timestamp = Instant.now()
 
+    // Query storage for ALL waiting workflows (lazy loading)
+    val loadWaitingWorkflows: Future[Unit] =
+      for
+        storageWaiting <- storage.listWorkflowsWaitingForEvent(name)
+        // Load any workflows not already in memory
+        notInMemory = storageWaiting.filter(w => stateCoordinator.getActive(w.id).isEmpty)
+        _ <- stateCoordinator.recoverWorkflows(notInMemory)
+      yield ()
+
     for
       _ <- hooks.yieldPoint("sendEventBroadcast.beforeSubmit")
+      // Load waiting workflows from storage
+      _ <- loadWaitingWorkflows
       result <- stateCoordinator.submit(CoordinatorOp.SendBroadcastEvent(
         name, event, eventId, timestamp, eventStorage.asInstanceOf[DurableStorage[?, ?]]
       ))
@@ -415,50 +434,115 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
           Future.successful(false)
     yield result
 
-  // Recover workflows on startup
+  // Recover workflows on startup (lazy loading - only loads what's needed)
   def recover(): Future[RecoveryReport] =
     for
-      workflows <- storage.listActiveWorkflows()
-
-      // Fix partially-completed deliveries
-      fixed <- Future.traverse(workflows) { record =>
-        if record.status == WorkflowStatus.Suspended then
-          storage.retrieveWinningCondition(record.id, record.metadata.activityIndex).flatMap {
-            case Some(_) =>
-              // Event was stored but status not updated - fix it
-              storage.updateWorkflowStatus(record.id, WorkflowStatus.Running).map { _ =>
-                record.copy(
-                  status = WorkflowStatus.Running,
-                  metadata = record.metadata.copy(activityIndex = record.metadata.activityIndex + 1)
-                )
-              }
-            case None =>
-              Future.successful(record)
-          }
-        else
-          Future.successful(record)
+      // 1. Load RUNNING workflows eagerly (were interrupted by crash)
+      running <- storage.listWorkflowsByStatus(WorkflowStatus.Running)
+      fixedRunning <- Future.traverse(running)(fixPartialDelivery)
+      _ <- stateCoordinator.recoverWorkflows(fixedRunning)
+      _ <- Future.traverse(fixedRunning) { record =>
+        recreateAndResumeInternal(record.id, record, record.metadata.activityIndex)
+          .recover { case _ => () }
       }
 
-      (suspended, running) = fixed.partition(_.status == WorkflowStatus.Suspended)
-      _ <- stateCoordinator.recoverWorkflows(fixed)
-      // Re-register timers for suspended workflows
-      _ <- Future.traverse(suspended) { record =>
+      // 2. Load suspended workflows with timers within horizon
+      timerHorizonJava = java.time.Duration.ofMillis(config.timerHorizon.toMillis)
+      timerDeadline = Instant.now().plus(timerHorizonJava)
+      nearTimers <- storage.listWorkflowsWithTimerBefore(timerDeadline)
+      fixedTimers <- Future.traverse(nearTimers)(fixPartialDelivery)
+      // Filter out any that are now Running (after fix)
+      suspendedTimers = fixedTimers.filter(_.status == WorkflowStatus.Suspended)
+      _ <- stateCoordinator.recoverWorkflows(suspendedTimers)
+      _ <- Future.traverse(suspendedTimers) { record =>
         record.waitingForTimer match
           case Some(wakeAt) =>
             scheduleTimer(record.id, wakeAt, record.metadata.activityIndex)
           case None =>
             Future.successful(())
       }
-      // Resume running workflows (were interrupted)
-      _ <- Future.traverse(running) { record =>
-        recreateAndResumeInternal(record.id, record, record.metadata.activityIndex)
-          .recover { case _ => () }
-      }
+
+      // 3. Load workflows waiting for pending broadcast events
+      // Note: We don't deliver here - pending events will be checked when
+      // workflows resume via SuspendAndCheckPending
+      pendingEvents <- storage.listAllPendingBroadcastEvents()
+      pendingEventNames = pendingEvents.map(_._1).distinct
+      workflowsWaitingForEvents <- Future.traverse(pendingEventNames) { eventName =>
+        storage.listWorkflowsWaitingForEvent(eventName)
+      }.map(_.flatten.distinctBy(_.id))
+      // Load these workflows into memory so they can receive events
+      _ <- stateCoordinator.recoverWorkflows(workflowsWaitingForEvents)
+
+      // 4. Start periodic sweeps (timers + cache eviction)
+      _ = startTimerSweep()
+      _ = startCacheEviction()
     yield RecoveryReport(
-      activeWorkflows = fixed.size,
-      resumedSuspended = suspended.size,
-      resumedRunning = running.size
+      runningResumed = fixedRunning.size,
+      nearTimersLoaded = suspendedTimers.size,
+      pendingEventsDelivered = pendingEvents.size,  // Events available, not necessarily delivered yet
+      totalLoaded = fixedRunning.size + suspendedTimers.size + workflowsWaitingForEvents.size
     )
+
+  // Fix partially-completed event delivery
+  private def fixPartialDelivery(record: WorkflowRecord): Future[WorkflowRecord] =
+    if record.status == WorkflowStatus.Suspended then
+      storage.retrieveWinningCondition(record.id, record.metadata.activityIndex).flatMap {
+        case Some(_) =>
+          // Event was stored but status not updated - fix it
+          storage.updateWorkflowStatus(record.id, WorkflowStatus.Running).map { _ =>
+            record.copy(
+              status = WorkflowStatus.Running,
+              metadata = record.metadata.copy(activityIndex = record.metadata.activityIndex + 1)
+            )
+          }
+        case None =>
+          Future.successful(record)
+      }
+    else
+      Future.successful(record)
+
+  // Periodic timer sweep - loads upcoming timers
+  private def startTimerSweep(): Unit =
+    val sweepIntervalMs = config.timerSweepInterval.toMillis
+    scheduler.schedule(scala.concurrent.duration.Duration(sweepIntervalMs, "ms")) {
+      runTimerSweep().flatMap { _ =>
+        // Reschedule
+        Future.successful(startTimerSweep())
+      }
+    }
+
+  private def runTimerSweep(): Future[Unit] =
+    val timerHorizonJava = java.time.Duration.ofMillis(config.timerHorizon.toMillis)
+    val deadline = Instant.now().plus(timerHorizonJava)
+    for
+      workflows <- storage.listWorkflowsWithTimerBefore(deadline)
+      // Filter out workflows already in memory
+      unscheduled = workflows.filter(w => stateCoordinator.getActive(w.id).isEmpty)
+      _ <- stateCoordinator.recoverWorkflows(unscheduled)
+      _ <- Future.traverse(unscheduled) { w =>
+        w.waitingForTimer match
+          case Some(wakeAt) =>
+            scheduleTimer(w.id, wakeAt, w.metadata.activityIndex)
+          case None =>
+            Future.successful(())
+      }
+    yield ()
+
+  // Periodic cache eviction
+  private def startCacheEviction(): Unit =
+    val evictionIntervalMs = config.cacheEvictionInterval.toMillis
+    scheduler.schedule(scala.concurrent.duration.Duration(evictionIntervalMs, "ms")) {
+      runCacheEviction().flatMap { _ =>
+        // Reschedule
+        Future.successful(startCacheEviction())
+      }
+    }
+
+  private def runCacheEviction(): Future[Unit] =
+    val ttlJava = java.time.Duration.ofMillis(config.cacheTtl.toMillis)
+    val threshold = Instant.now().minus(ttlJava)
+    // Let coordinator handle the filtering since it has access to activeMap
+    stateCoordinator.submit(CoordinatorOp.EvictByTtl(threshold)).map(_ => ())
 
   // Shutdown
   def shutdown(): Future[Unit] =

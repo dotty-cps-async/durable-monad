@@ -26,6 +26,9 @@ trait DurableStorageBackend:
   /** Load workflow metadata */
   def loadWorkflowMetadata(workflowId: WorkflowId): Future[Option[(WorkflowMetadata, WorkflowStatus)]]
 
+  /** Load full workflow record (including wait conditions) for lazy loading */
+  def loadWorkflowRecord(workflowId: WorkflowId): Future[Option[WorkflowRecord]]
+
   /** Update workflow status only */
   def updateWorkflowStatus(workflowId: WorkflowId, status: WorkflowStatus): Future[Unit]
 
@@ -40,6 +43,18 @@ trait DurableStorageBackend:
 
   /** List all active (Running or Suspended) workflows */
   def listActiveWorkflows(): Future[Seq[WorkflowRecord]]
+
+  /** List workflows by specific status */
+  def listWorkflowsByStatus(status: WorkflowStatus): Future[Seq[WorkflowRecord]]
+
+  /** List suspended workflows with timer before deadline (for periodic sweep) */
+  def listWorkflowsWithTimerBefore(deadline: Instant): Future[Seq[WorkflowRecord]]
+
+  /** List suspended workflows waiting for a specific event type */
+  def listWorkflowsWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]]
+
+  /** List all pending broadcast events (for recovery) */
+  def listAllPendingBroadcastEvents(): Future[Seq[(String, PendingEvent[?])]]
 
   // Combined query: winning condition tracking for replay
 

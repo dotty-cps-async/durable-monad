@@ -49,6 +49,9 @@ class JsonFileStorage(val baseDir: Path) extends DurableStorageBackend:
   def loadWorkflowMetadata(workflowId: WorkflowId): Future[Option[(WorkflowMetadata, WorkflowStatus)]] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
 
+  def loadWorkflowRecord(workflowId: WorkflowId): Future[Option[WorkflowRecord]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
   def updateWorkflowStatus(workflowId: WorkflowId, status: WorkflowStatus): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
 
@@ -62,6 +65,18 @@ class JsonFileStorage(val baseDir: Path) extends DurableStorageBackend:
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
 
   def listActiveWorkflows(): Future[Seq[WorkflowRecord]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def listWorkflowsByStatus(status: WorkflowStatus): Future[Seq[WorkflowRecord]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def listWorkflowsWithTimerBefore(deadline: Instant): Future[Seq[WorkflowRecord]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def listWorkflowsWaitingForEvent(eventName: String): Future[Seq[WorkflowRecord]] =
+    Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
+
+  def listAllPendingBroadcastEvents(): Future[Seq[(String, PendingEvent[?])]] =
     Future.failed(new NotImplementedError("JsonFileStorage is for cross-process tests only"))
 
   private def winningConditionFile(workflowId: WorkflowId, index: Int): Path =
