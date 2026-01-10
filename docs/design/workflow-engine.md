@@ -1016,17 +1016,3 @@ case class WorkflowRecord(
   lastAccessedAt: Instant = Instant.now()  // For TTL-based cache eviction
 )
 ```
-
-## Next Steps
-
-1. Define `WorkflowEngine[S]` trait (shared)
-2. Define `WorkflowEnginePlatform` trait (shared)
-3. Extend `DurableStorageBackend` with workflow metadata methods
-4. Implement `WorkflowStateCoordinator` (shared trait, platform-specific impls)
-5. Implement `WorkflowEngineJvm` (JVM platform)
-6. Implement `WorkflowEngineJs` (JS platform)
-7. Implement `WorkflowEngineNative` (Native platform)
-8. Add event delivery with `DurableEventConfig` semantics
-9. Add timer scheduling integration
-10. Add child workflow support
-11. Implement recovery logic
