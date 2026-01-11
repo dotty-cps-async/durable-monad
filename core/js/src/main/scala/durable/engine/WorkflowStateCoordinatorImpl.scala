@@ -71,11 +71,11 @@ class WorkflowStateCoordinatorImpl(
       case CoordinatorOp.SuspendAndCheckPending(id, activityIndex, condition, eventStorages) =>
         executeSuspendAndCheckPending(id, activityIndex, condition, eventStorages)
 
-      case CoordinatorOp.SendBroadcastEvent(eventName, event, eventId, timestamp, eventStorage) =>
-        executeSendBroadcastEvent(eventName, event, eventId, timestamp, eventStorage)
+      case e: CoordinatorOp.SendBroadcastEvent[e] =>
+        executeSendBroadcastEvent(e)
 
-      case CoordinatorOp.SendTargetedEvent(targetId, eventName, event, eventId, timestamp, policy, eventStorage) =>
-        executeSendTargetedEvent(targetId, eventName, event, eventId, timestamp, policy, eventStorage)
+      case e: CoordinatorOp.SendTargetedEvent[e] =>
+        executeSendTargetedEvent(e)
 
       case CoordinatorOp.HandleTimerFired(workflowId, wakeAt, activityIndex, timeReachedStorage) =>
         executeHandleTimerFired(workflowId, wakeAt, activityIndex, timeReachedStorage)
@@ -201,56 +201,42 @@ class WorkflowStateCoordinatorImpl(
     result
   }
 
-  private def executeSendBroadcastEvent(
-    eventName: String,
-    event: Any,
-    eventId: EventId,
-    timestamp: Instant,
-    eventStorage: DurableStorage[?, ?]
-  ): Future[SendResult] = async[Future] {
+  private def executeSendBroadcastEvent[E](op: CoordinatorOp.SendBroadcastEvent[E]): Future[SendResult] = async[Future] {
     val waiting = activeMap.values.filter { r =>
-      r.status == WorkflowStatus.Suspended && r.isWaitingForEvent(eventName)
+      r.status == WorkflowStatus.Suspended && r.isWaitingForEvent(op.eventName)
     }.toSeq
 
     if waiting.isEmpty then
-      await(storage.savePendingEvent(eventName, eventId, event, timestamp))
-      SendResult.Queued(eventId)
+      await(storage.savePendingEvent(op.eventName, op.eventId, op.event, op.timestamp)(using op.eventStorage))
+      SendResult.Queued(op.eventId)
     else
       val target = waiting.head
       val activityIndex = target.metadata.activityIndex
       await(storage.deliverEvent(
-        target.id, activityIndex, SingleEvent(eventName), event,
-        eventStorage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+        target.id, activityIndex, SingleEvent(op.eventName), op.event,
+        op.eventStorage.asInstanceOf[DurableStorage[E, DurableStorageBackend]]
       ))
       updateInMemoryAfterDeliver(target.id, activityIndex)
       SendResult.Delivered(target.id)
   }
 
-  private def executeSendTargetedEvent(
-    targetWorkflowId: WorkflowId,
-    eventName: String,
-    event: Any,
-    eventId: EventId,
-    timestamp: Instant,
-    policy: DeadLetterPolicy,
-    eventStorage: DurableStorage[?, ?]
-  ): Future[SendResult] = async[Future] {
-    activeMap.get(targetWorkflowId) match
+  private def executeSendTargetedEvent[E](op: CoordinatorOp.SendTargetedEvent[E]): Future[SendResult] = async[Future] {
+    activeMap.get(op.targetWorkflowId) match
       case Some(record) if record.status.isTerminal =>
         SendResult.TargetTerminated(record.status)
 
-      case Some(record) if record.status == WorkflowStatus.Suspended && record.isWaitingForEvent(eventName) =>
+      case Some(record) if record.status == WorkflowStatus.Suspended && record.isWaitingForEvent(op.eventName) =>
         val activityIndex = record.metadata.activityIndex
         await(storage.deliverEvent(
-          targetWorkflowId, activityIndex, SingleEvent(eventName), event,
-          eventStorage.asInstanceOf[DurableStorage[Any, DurableStorageBackend]]
+          op.targetWorkflowId, activityIndex, SingleEvent(op.eventName), op.event,
+          op.eventStorage.asInstanceOf[DurableStorage[E, DurableStorageBackend]]
         ))
-        updateInMemoryAfterDeliver(targetWorkflowId, activityIndex)
-        SendResult.Delivered(targetWorkflowId)
+        updateInMemoryAfterDeliver(op.targetWorkflowId, activityIndex)
+        SendResult.Delivered(op.targetWorkflowId)
 
       case Some(_) =>
-        await(storage.saveWorkflowPendingEvent(targetWorkflowId, eventName, eventId, event, timestamp, policy))
-        SendResult.Queued(eventId)
+        await(storage.saveWorkflowPendingEvent(op.targetWorkflowId, op.eventName, op.eventId, op.event, op.timestamp, op.policy)(using op.eventStorage))
+        SendResult.Queued(op.eventId)
 
       case None =>
         SendResult.TargetNotFound

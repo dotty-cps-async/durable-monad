@@ -109,8 +109,8 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
             // Just discard - do nothing
             Future.successful(())
           case DeadLetterPolicy.MoveToBroadcast =>
-            // Move to broadcast queue
-            storage.savePendingEvent(pending.eventName, pending.eventId, pending.value, pending.timestamp)
+            // Move to broadcast queue (no re-serialization needed)
+            storage.moveTargetedEventToBroadcast(workflowId, pending.eventName, pending.eventId)
           case DeadLetterPolicy.MoveToDeadLetter =>
             // Create dead event and save to dead letter queue
             val deadEvent = DeadEvent(
@@ -348,7 +348,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       _ <- ensureLoaded
       result <- stateCoordinator.submit(CoordinatorOp.SendTargetedEvent(
         targetWorkflowId, name, event, eventId, timestamp, policy,
-        eventStorage.asInstanceOf[DurableStorage[?, ?]]
+        eventStorage
       ))
       _ <- result match
         case SendResult.Delivered(targetId) =>
@@ -388,7 +388,7 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
       // Load waiting workflows from storage
       _ <- loadWaitingWorkflows
       result <- stateCoordinator.submit(CoordinatorOp.SendBroadcastEvent(
-        name, event, eventId, timestamp, eventStorage.asInstanceOf[DurableStorage[?, ?]]
+        name, event, eventId, timestamp, eventStorage
       ))
       _ <- hooks.yieldPoint("sendEventBroadcast.afterSubmit")
       _ <- result match
@@ -563,22 +563,18 @@ class WorkflowEngineImpl[S <: DurableStorageBackend](
 
   def replayDeadLetter(eventId: EventId): Future[Boolean] =
     storage.loadDeadEventById(eventId).flatMap {
-      case Some((eventName, deadEvent)) =>
-        for
-          _ <- storage.removeDeadEvent(eventName, eventId)
-          _ <- storage.savePendingEvent(eventName, eventId, deadEvent.value, deadEvent.timestamp)
-        yield true
+      case Some((eventName, _)) =>
+        // Replay to broadcast queue (no re-serialization needed)
+        storage.replayDeadEventToBroadcast(eventName, eventId).map(_ => true)
       case None =>
         Future.successful(false)
     }
 
   def replayDeadLetterTo(eventId: EventId, targetWorkflowId: WorkflowId): Future[Unit] =
     storage.loadDeadEventById(eventId).flatMap {
-      case Some((eventName, deadEvent)) =>
-        for
-          _ <- storage.removeDeadEvent(eventName, eventId)
-          _ <- storage.saveWorkflowPendingEvent(targetWorkflowId, eventName, eventId, deadEvent.value, deadEvent.timestamp)
-        yield ()
+      case Some((eventName, _)) =>
+        // Replay to targeted workflow queue (no re-serialization needed)
+        storage.replayDeadEventToTargeted(eventName, eventId, targetWorkflowId)
       case None =>
         Future.failed(new RuntimeException(s"Dead event not found: ${eventId.value}"))
     }

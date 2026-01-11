@@ -213,7 +213,9 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
     }
     Future.successful(result)
 
-  def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit] =
+  def savePendingEvent[E](eventName: String, eventId: EventId, value: E, timestamp: Instant)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
     val events = pendingEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
     // Note: value is stored as string representation - for proper serialization need type info
     events += StoredPendingEvent(eventId.value, eventName, value.toString, timestamp.toString)
@@ -232,11 +234,27 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
     }
     Future.successful(())
 
-  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit] =
+  def saveWorkflowPendingEvent[E](workflowId: WorkflowId, eventName: String, eventId: EventId, value: E, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
     val wfEvents = workflowPendingEvents.getOrElseUpdate(workflowId.value, TrieMap.empty)
     val events = wfEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
     // Note: policy not stored in this simple test storage - uses default
     events += StoredPendingEvent(eventId.value, eventName, value.toString, timestamp.toString)
+    Future.successful(())
+
+  def moveTargetedEventToBroadcast(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit] =
+    // Find and remove from targeted events
+    for
+      wfEvents <- workflowPendingEvents.get(workflowId.value)
+      events <- wfEvents.get(eventName)
+    do
+      val idx = events.indexWhere(_.eventId == eventId.value)
+      if idx >= 0 then
+        val event = events.remove(idx)
+        // Add to broadcast pending events
+        val pending = pendingEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+        pending += event
     Future.successful(())
 
   def loadWorkflowPendingEvents(workflowId: WorkflowId, eventName: String): Future[Seq[PendingEvent[?]]] =
@@ -296,6 +314,29 @@ class MemoryWithJsonBackupStorage(backupFile: Path) extends DurableStorageBacken
         (eventName, events.find(_.eventId == eventId).get)
     }
     Future.successful(result)
+
+  def replayDeadEventToBroadcast(eventName: String, eventId: EventId): Future[Unit] =
+    deadLetterEvents.get(eventName).foreach { events =>
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then
+        val deadEvent = events.remove(idx)
+        // Add to broadcast pending events
+        val pending = pendingEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+        pending += StoredPendingEvent(deadEvent.eventId.value, deadEvent.eventName, deadEvent.value.toString, deadEvent.timestamp.toString)
+    }
+    Future.successful(())
+
+  def replayDeadEventToTargeted(eventName: String, eventId: EventId, targetWorkflowId: WorkflowId): Future[Unit] =
+    deadLetterEvents.get(eventName).foreach { events =>
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then
+        val deadEvent = events.remove(idx)
+        // Add to targeted pending events
+        val wfEvents = workflowPendingEvents.getOrElseUpdate(targetWorkflowId.value, TrieMap.empty)
+        val targeted = wfEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+        targeted += StoredPendingEvent(deadEvent.eventId.value, deadEvent.eventName, deadEvent.value.toString, deadEvent.timestamp.toString)
+    }
+    Future.successful(())
 
   // Composite operations - simple sequential implementations
   // These need to store data in same format as DurableStorage typeclass

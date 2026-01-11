@@ -145,7 +145,10 @@ class MemoryBackingStore(
 
   // DurableStorageBackend: pending events
 
-  def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit] =
+  def savePendingEvent[E](eventName: String, eventId: EventId, value: E, timestamp: Instant)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    // Memory store doesn't need serialization - just store the value directly
     val events = pendingEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
     events += PendingEvent(eventId, eventName, value, timestamp)
     Future.successful(())
@@ -163,7 +166,10 @@ class MemoryBackingStore(
 
   // DurableStorageBackend: targeted pending events (per-workflow)
 
-  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit] =
+  def saveWorkflowPendingEvent[E](workflowId: WorkflowId, eventName: String, eventId: EventId, value: E, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    // Memory store doesn't need serialization - just store the value directly
     val workflowEvents = workflowPendingEvents.getOrElseUpdate(workflowId, mutable.Map.empty)
     val events = workflowEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
     events += PendingEvent(eventId, eventName, value, timestamp, policy)
@@ -221,6 +227,45 @@ class MemoryBackingStore(
         (eventName, events.find(_.eventId == eventId).get)
     }
     Future.successful(result)
+
+  def replayDeadEventToBroadcast(eventName: String, eventId: EventId): Future[Unit] =
+    // Find and remove the dead event
+    deadLetterEvents.get(eventName).foreach { events =>
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then
+        val deadEvent = events.remove(idx)
+        // Add to broadcast pending events
+        val pending = pendingEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+        pending += PendingEvent(deadEvent.eventId, deadEvent.eventName, deadEvent.value, deadEvent.timestamp)
+    }
+    Future.successful(())
+
+  def replayDeadEventToTargeted(eventName: String, eventId: EventId, targetWorkflowId: WorkflowId): Future[Unit] =
+    // Find and remove the dead event
+    deadLetterEvents.get(eventName).foreach { events =>
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then
+        val deadEvent = events.remove(idx)
+        // Add to targeted pending events
+        val workflowEvents = workflowPendingEvents.getOrElseUpdate(targetWorkflowId, mutable.Map.empty)
+        val targeted = workflowEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+        targeted += PendingEvent(deadEvent.eventId, deadEvent.eventName, deadEvent.value, deadEvent.timestamp)
+    }
+    Future.successful(())
+
+  def moveTargetedEventToBroadcast(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit] =
+    // Find and remove from targeted events
+    for
+      workflowEvents <- workflowPendingEvents.get(workflowId)
+      events <- workflowEvents.get(eventName)
+    do
+      val idx = events.indexWhere(_.eventId == eventId)
+      if idx >= 0 then
+        val event = events.remove(idx)
+        // Add to broadcast pending events
+        val pending = pendingEvents.getOrElseUpdate(eventName, mutable.ArrayBuffer.empty)
+        pending += event
+    Future.successful(())
 
   // Engine-specific: update workflow record with wait condition
   def updateWorkflowRecord(workflowId: WorkflowId, update: WorkflowRecord => WorkflowRecord): Future[Unit] =

@@ -73,8 +73,10 @@ trait DurableStorageBackend:
 
   // Engine: broadcast pending events operations (shared by event name)
 
-  /** Save a pending broadcast event */
-  def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit]
+  /** Save a pending broadcast event (typed - for new events) */
+  def savePendingEvent[E](eventName: String, eventId: EventId, value: E, timestamp: Instant)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit]
 
   /** Load pending broadcast events for a given event name */
   def loadPendingEvents(eventName: String): Future[Seq[PendingEvent[?]]]
@@ -84,8 +86,13 @@ trait DurableStorageBackend:
 
   // Engine: targeted pending events operations (per-workflow)
 
-  /** Save a pending event targeted at a specific workflow */
-  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit]
+  /** Save a pending event targeted at a specific workflow (typed - for new events) */
+  def saveWorkflowPendingEvent[E](workflowId: WorkflowId, eventName: String, eventId: EventId, value: E, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit]
+
+  /** Move a targeted pending event to broadcast queue (no re-serialization needed) */
+  def moveTargetedEventToBroadcast(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit]
 
   /** Load pending events targeted at a specific workflow for a given event name */
   def loadWorkflowPendingEvents(workflowId: WorkflowId, eventName: String): Future[Seq[PendingEvent[?]]]
@@ -112,6 +119,12 @@ trait DurableStorageBackend:
 
   /** Load a specific dead event by ID (across all event names) */
   def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]]
+
+  /** Replay a dead event to the broadcast queue (no re-serialization needed) */
+  def replayDeadEventToBroadcast(eventName: String, eventId: EventId): Future[Unit]
+
+  /** Replay a dead event to a targeted workflow queue (no re-serialization needed) */
+  def replayDeadEventToTargeted(eventName: String, eventId: EventId, targetWorkflowId: WorkflowId): Future[Unit]
 
   // === Composite operations for atomic persistence ===
 

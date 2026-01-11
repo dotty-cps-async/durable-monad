@@ -41,22 +41,22 @@ enum CoordinatorOp[+R]:
     eventStorages: Map[String, DurableStorage[?, ?]]
   ) extends CoordinatorOp[SuspendResult]
 
-  case SendBroadcastEvent(
+  case SendBroadcastEvent[E](
     eventName: String,
-    event: Any,
+    event: E,
     eventId: EventId,
     timestamp: Instant,
-    eventStorage: DurableStorage[?, ?]
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend]
   ) extends CoordinatorOp[SendResult]
 
-  case SendTargetedEvent(
+  case SendTargetedEvent[E](
     targetWorkflowId: WorkflowId,
     eventName: String,
-    event: Any,
+    event: E,
     eventId: EventId,
     timestamp: Instant,
     policy: DeadLetterPolicy,
-    eventStorage: DurableStorage[?, ?]
+    eventStorage: DurableStorage[E, ? <: DurableStorageBackend]
   ) extends CoordinatorOp[SendResult]
 
   case HandleTimerFired(

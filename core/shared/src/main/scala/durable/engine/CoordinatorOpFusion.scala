@@ -7,8 +7,8 @@ import durable.*
  */
 enum FusedOp:
   case Single(op: CoordinatorOp[?])
-  case BatchDeliverEvents(workflowId: WorkflowId, events: Seq[CoordinatorOp.SendTargetedEvent])
-  case SuspendWithImmediateEvent(suspend: CoordinatorOp.SuspendAndCheckPending, event: CoordinatorOp.SendBroadcastEvent)
+  case BatchDeliverEvents(workflowId: WorkflowId, events: Seq[CoordinatorOp.SendTargetedEvent[?]])
+  case SuspendWithImmediateEvent(suspend: CoordinatorOp.SuspendAndCheckPending, event: CoordinatorOp.SendBroadcastEvent[?])
 
 /**
  * Analyze batch of operations and fuse where possible.
@@ -38,8 +38,8 @@ object CoordinatorOpFusion:
       case CoordinatorOp.RegisterRunner(id, _) => Some(id)
       case CoordinatorOp.RegisterTimer(id, _) => Some(id)
       case CoordinatorOp.SuspendAndCheckPending(id, _, _, _) => Some(id)
-      case CoordinatorOp.SendBroadcastEvent(_, _, _, _, _) => None
-      case CoordinatorOp.SendTargetedEvent(id, _, _, _, _, _, _) => Some(id)
+      case _: CoordinatorOp.SendBroadcastEvent[?] => None
+      case e: CoordinatorOp.SendTargetedEvent[?] => Some(e.targetWorkflowId)
       case CoordinatorOp.HandleTimerFired(id, _, _, _) => Some(id)
       case CoordinatorOp.MarkFinished(id) => Some(id)
       case CoordinatorOp.CancelWorkflow(id) => Some(id)
@@ -57,7 +57,7 @@ object CoordinatorOpFusion:
     workflowIdOpt match
       case Some(workflowId) =>
         // Try to batch multiple targeted events to same workflow
-        val targetedEvents = ops.collect { case e: CoordinatorOp.SendTargetedEvent if e.targetWorkflowId == workflowId => e }
+        val targetedEvents = ops.collect { case e: CoordinatorOp.SendTargetedEvent[?] if e.targetWorkflowId == workflowId => e }
         if targetedEvents.size > 1 then
           val nonEvents = ops.filterNot(targetedEvents.contains)
           nonEvents.map(FusedOp.Single(_)) :+ FusedOp.BatchDeliverEvents(workflowId, targetedEvents)
@@ -67,7 +67,7 @@ object CoordinatorOpFusion:
       case None =>
         // Check for Suspend + immediate broadcast event pattern
         val suspends = ops.collect { case s: CoordinatorOp.SuspendAndCheckPending => s }
-        val broadcasts = ops.collect { case b: CoordinatorOp.SendBroadcastEvent => b }
+        val broadcasts = ops.collect { case b: CoordinatorOp.SendBroadcastEvent[?] => b }
 
         if suspends.size == 1 && broadcasts.size == 1 then
           val suspend = suspends.head

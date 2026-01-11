@@ -122,7 +122,9 @@ class JsonFileStorageJS(val baseDir: String) extends DurableStorageBackend:
     else
       Future.successful(None)
 
-  def savePendingEvent(eventName: String, eventId: EventId, value: Any, timestamp: Instant): Future[Unit] =
+  def savePendingEvent[E](eventName: String, eventId: EventId, value: E, timestamp: Instant)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
 
   def loadPendingEvents(eventName: String): Future[Seq[PendingEvent[?]]] =
@@ -131,7 +133,12 @@ class JsonFileStorageJS(val baseDir: String) extends DurableStorageBackend:
   def removePendingEvent(eventName: String, eventId: EventId): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
 
-  def saveWorkflowPendingEvent(workflowId: WorkflowId, eventName: String, eventId: EventId, value: Any, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard): Future[Unit] =
+  def saveWorkflowPendingEvent[E](workflowId: WorkflowId, eventName: String, eventId: EventId, value: E, timestamp: Instant, policy: DeadLetterPolicy = DeadLetterPolicy.Discard)(
+    using storage: DurableStorage[E, ? <: DurableStorageBackend]
+  ): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
+
+  def moveTargetedEventToBroadcast(workflowId: WorkflowId, eventName: String, eventId: EventId): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
 
   def loadWorkflowPendingEvents(workflowId: WorkflowId, eventName: String): Future[Seq[PendingEvent[?]]] =
@@ -156,6 +163,12 @@ class JsonFileStorageJS(val baseDir: String) extends DurableStorageBackend:
     Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
 
   def loadDeadEventById(eventId: EventId): Future[Option[(String, DeadEvent[?])]] =
+    Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
+
+  def replayDeadEventToBroadcast(eventName: String, eventId: EventId): Future[Unit] =
+    Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
+
+  def replayDeadEventToTargeted(eventName: String, eventId: EventId, targetWorkflowId: WorkflowId): Future[Unit] =
     Future.failed(new NotImplementedError("JsonFileStorageJS is for cross-process tests only"))
 
   // Composite operations - not implemented for this test storage
