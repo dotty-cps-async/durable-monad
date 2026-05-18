@@ -6,10 +6,11 @@ ThisBuild / versionScheme := Some("semver-spec")
 ThisBuild / publishTo := localStaging.value
 
 // Shared library dependencies
-lazy val cpsAsyncVersion = "1.2.0"
+lazy val cpsAsyncVersion = "1.3.3"
 lazy val cpsAsyncOrg = "io.github.dotty-cps-async"
-lazy val appContextVersion = "0.3.0"
-lazy val jsoniterVersion = "2.30.15"
+lazy val appContextVersion = "0.4.0"
+lazy val jsoniterVersion = "2.35.3"
+lazy val munitVersion = "1.3.0"
 
 // Cross-platform core (Durable monad, DurableCacheBackend, etc.)
 lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
@@ -21,8 +22,7 @@ lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
     libraryDependencies ++= Seq(
       cpsAsyncOrg %%% "dotty-cps-async" % cpsAsyncVersion,
       "com.github.rssh" %%% "appcontext" % appContextVersion,
-      "com.github.rssh" %%% "appcontext-tf" % appContextVersion,
-      "org.scalameta" %%% "munit" % "1.0.0" % Test
+      "org.scalameta" %%% "munit" % munitVersion % Test
     )
   )
   .jvmSettings(
@@ -53,7 +53,7 @@ lazy val coreJS = core.js
 lazy val coreNative = core.native
 
 // Cats-effect integration module
-lazy val catsEffectVersion = "3.5.7"
+lazy val catsEffectVersion = "3.7.0"
 
 lazy val durableCe3 = crossProject(JVMPlatform, JSPlatform)
   .crossType(CrossType.Full)
@@ -64,9 +64,9 @@ lazy val durableCe3 = crossProject(JVMPlatform, JSPlatform)
     name := "durable-monad-ce3",
     libraryDependencies ++= Seq(
       "org.typelevel" %%% "cats-effect" % catsEffectVersion,
-      cpsAsyncOrg %%% "cps-async-connect-cats-effect" % "1.0.0",
-      "org.scalameta" %%% "munit" % "1.0.0" % Test,
-      "org.typelevel" %%% "munit-cats-effect" % "2.0.0" % Test
+      cpsAsyncOrg %%% "cps-async-connect-cats-effect" % cpsAsyncVersion,
+      "org.scalameta" %%% "munit" % munitVersion % Test,
+      "org.typelevel" %%% "munit-cats-effect" % "2.1.0" % Test
     )
   )
   .jvmSettings(
