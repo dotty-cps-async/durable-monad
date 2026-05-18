@@ -1,6 +1,5 @@
 package durable
 
-import scala.concurrent.Future
 
 opaque type WorkflowId = String
 
